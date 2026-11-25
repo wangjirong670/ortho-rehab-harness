@@ -1,0 +1,361 @@
+version: "1.0.0"
+domain: "中医骨伤科与康复科常用临床量表规范"
+description: "确定性量表算分与分级标准。LLM 仅负责抽取各条目原始参数，分值汇总、百分比转换与严重度分级严格由 core_tools/calculator.py 执行。"
+
+scales:
+  - scale_id: "VAS_PAIN"
+    name: "视觉模拟疼痛评分（VAS）"
+    version_note: "0-10 分制标准成人疼痛视觉模拟评分"
+    review_status: "draft_for_clinician_review"
+    direction: "higher_is_worse"
+    min_total: 0
+    max_total: 10
+    formula_type: "direct_sum"
+    items:
+      - item_id: "pain_score"
+        label: "当前或目标时段疼痛强度评分（0=无痛，10=剧烈难以忍受的疼痛）"
+        min_value: 0
+        max_value: 10
+        step: 0.5
+        required: true
+    severity_bands:
+      - label: "无痛"
+        min_score: 0
+        max_score: 0
+      - label: "轻度疼痛"
+        min_score: 0.1
+        max_score: 3.0
+      - label: "中度疼痛"
+        min_score: 3.1
+        max_score: 6.0
+      - label: "重度疼痛"
+        min_score: 6.1
+        max_score: 10.0
+    references:
+      - "疼痛评估与管理临床实践指南（VAS 0-10 分标准）"
+
+  - scale_id: "WOMAC_LIKERT_V3_1"
+    name: "西安大略和麦克马斯特大学骨关节炎指数（WOMAC Likert 3.1 版）"
+    version_note: "Likert 5 级评分制（每项 0=无, 1=轻度, 2=中度, 3=重度, 4=极重度），共 24 项，原始总分 0-96 分，支持同步计算 0-100 标准化百分制分（total/96*100）。"
+    review_status: "draft_for_clinician_review"
+    direction: "higher_is_worse"
+    min_total: 0
+    max_total: 96
+    formula_type: "subscale_sum_with_normalized_pct"
+    subscales:
+      - subscale_id: "pain"
+        label: "疼痛维度（5项）"
+        min_score: 0
+        max_score: 20
+        item_count: 5
+      - subscale_id: "stiffness"
+        label: "僵硬维度（2项）"
+        min_score: 0
+        max_score: 8
+        item_count: 2
+      - subscale_id: "physical_function"
+        label: "日常活动功能维度（17项）"
+        min_score: 0
+        max_score: 68
+        item_count: 17
+    items:
+      - item_id: "pain_walking"
+        subscale_id: "pain"
+        label: "平地行走时疼痛"
+        min_value: 0
+        max_value: 4
+      - item_id: "pain_stairs"
+        subscale_id: "pain"
+        label: "上下楼梯时疼痛"
+        min_value: 0
+        max_value: 4
+      - item_id: "pain_night"
+        subscale_id: "pain"
+        label: "夜间卧床时疼痛"
+        min_value: 0
+        max_value: 4
+      - item_id: "pain_rest"
+        subscale_id: "pain"
+        label: "坐位或卧位休息时疼痛"
+        min_value: 0
+        max_value: 4
+      - item_id: "pain_standing"
+        subscale_id: "pain"
+        label: "直立负重时疼痛"
+        min_value: 0
+        max_value: 4
+      - item_id: "stiffness_morning"
+        subscale_id: "stiffness"
+        label: "早晨醒来时关节僵硬"
+        min_value: 0
+        max_value: 4
+      - item_id: "stiffness_later_day"
+        subscale_id: "stiffness"
+        label: "日间静坐/卧床后再次活动时僵硬"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_descending_stairs"
+        subscale_id: "physical_function"
+        label: "下楼梯"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_ascending_stairs"
+        subscale_id: "physical_function"
+        label: "上楼梯"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_rising_sitting"
+        subscale_id: "physical_function"
+        label: "从坐位站起"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_standing"
+        subscale_id: "physical_function"
+        label: "站立"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_bending"
+        subscale_id: "physical_function"
+        label: "弯腰拾物"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_walking_flat"
+        subscale_id: "physical_function"
+        label: "平地行走"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_car"
+        subscale_id: "physical_function"
+        label: "上下汽车"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_shopping"
+        subscale_id: "physical_function"
+        label: "外出购物"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_putting_socks"
+        subscale_id: "physical_function"
+        label: "穿袜子"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_rising_bed"
+        subscale_id: "physical_function"
+        label: "起床"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_taking_off_socks"
+        subscale_id: "physical_function"
+        label: "脱袜子"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_lying_bed"
+        subscale_id: "physical_function"
+        label: "卧床翻身"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_bath"
+        subscale_id: "physical_function"
+        label: "进出浴缸/淋浴"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_sitting"
+        subscale_id: "physical_function"
+        label: "静坐"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_toilet"
+        subscale_id: "physical_function"
+        label: "如厕坐下/站起"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_heavy_domestic"
+        subscale_id: "physical_function"
+        label: "重体力家务"
+        min_value: 0
+        max_value: 4
+      - item_id: "func_light_domestic"
+        subscale_id: "physical_function"
+        label: "轻体力家务"
+        min_value: 0
+        max_value: 4
+    severity_bands:
+      - label: "轻度功能受限/症状"
+        min_score: 0
+        max_score: 32
+      - label: "中度功能受限/症状"
+        min_score: 33
+        max_score: 64
+      - label: "重度功能受限/症状"
+        min_score: 65
+        max_score: 96
+    references:
+      - "Bellamy N. WOMAC Osteoarthritis Index User Guide (Likert 3.1, 0-96 分制)"
+
+  - scale_id: "JOA_CERVICAL_17"
+    name: "日本骨科协会颈椎脊髓功能评分（颈椎 JOA 17 分制）"
+    version_note: "经典颈椎脊髓病 JOA 17 分制（分数越高功能越好），支持 Hirabayashi 改善率公式：(术后评分 - 术前评分) / (17 - 术前评分) × 100%。"
+    review_status: "draft_for_clinician_review"
+    direction: "higher_is_better"
+    min_total: 0
+    max_total: 17
+    formula_type: "direct_sum_with_improvement_rate"
+    items:
+      - item_id: "upper_limb_motor"
+        label: "上肢运动功能（0=不能用筷/勺进食，4=正常）"
+        min_value: 0
+        max_value: 4
+      - item_id: "lower_limb_motor"
+        label: "下肢运动功能（0=不能行走，4=正常）"
+        min_value: 0
+        max_value: 4
+      - item_id: "upper_limb_sensory"
+        label: "上肢感觉功能（0=明显障碍，1=轻度障碍/麻木，2=正常）"
+        min_value: 0
+        max_value: 2
+      - item_id: "lower_limb_sensory"
+        label: "下肢感觉功能（0=明显障碍，1=轻度障碍/麻木，2=正常）"
+        min_value: 0
+        max_value: 2
+      - item_id: "trunk_sensory"
+        label: "躯干感觉功能（0=明显障碍，1=轻度障碍，2=正常）"
+        min_value: 0
+        max_value: 2
+      - item_id: "bladder_function"
+        label: "膀胱功能（0=尿潴留/失禁，1=明显排尿困难，2=轻度排尿困难，3=正常）"
+        min_value: 0
+        max_value: 3
+    severity_bands:
+      - label: "重度脊髓功能障碍"
+        min_score: 0
+        max_score: 8
+      - label: "中度脊髓功能障碍"
+        min_score: 9
+        max_score: 12
+      - label: "轻度脊髓功能障碍"
+        min_score: 13
+        max_score: 16
+      - label: "正常"
+        min_score: 17
+        max_score: 17
+    improvement_rate_formula: "(post_score - pre_score) / (17 - pre_score) * 100"
+    references:
+      - "日本骨科协会（JOA）颈椎脊髓病评定标准（17 分制）"
+
+  - scale_id: "JOA_LUMBAR_29"
+    name: "日本骨科协会下腰痛功能评分（腰椎 JOA 29 分制）"
+    version_note: "经典腰椎 JOA 29 分制（主观症状 0-9 + 临床体征 0-6 + 日常活动受限 0-14 + 膀胱功能 -6~0，理论范围 -6 至 29 分，分数越高功能越好），支持改善率公式：(术后 - 术前) / (29 - 术前) × 100%。"
+    review_status: "draft_for_clinician_review"
+    direction: "higher_is_better"
+    min_total: -6
+    max_total: 29
+    formula_type: "subscale_sum_with_improvement_rate"
+    subscales:
+      - subscale_id: "subjective_symptoms"
+        label: "主观症状（3项，0-9分）"
+        min_score: 0
+        max_score: 9
+        item_count: 3
+      - subscale_id: "clinical_signs"
+        label: "临床体征（3项，0-6分）"
+        min_score: 0
+        max_score: 6
+        item_count: 3
+      - subscale_id: "adl_restriction"
+        label: "日常活动受限（7项，0-14分）"
+        min_score: 0
+        max_score: 14
+        item_count: 7
+      - subscale_id: "bladder_function"
+        label: "膀胱功能（1项，-6~0分）"
+        min_score: -6
+        max_score: 0
+        item_count: 1
+    items:
+      - item_id: "low_back_pain"
+        subscale_id: "subjective_symptoms"
+        label: "下腰痛（0=持续剧痛，3=无痛）"
+        min_value: 0
+        max_value: 3
+      - item_id: "leg_pain_tingling"
+        subscale_id: "subjective_symptoms"
+        label: "下肢痛和/或麻木（0=持续剧痛麻木，3=无）"
+        min_value: 0
+        max_value: 3
+      - item_id: "gait"
+        subscale_id: "subjective_symptoms"
+        label: "步行能力（0=不能行走超过100米，3=正常）"
+        min_value: 0
+        max_value: 3
+      - item_id: "slr_test"
+        subscale_id: "clinical_signs"
+        label: "直腿抬高试验（0=<30°，1=30°-70°，2=阴性正常）"
+        min_value: 0
+        max_value: 2
+      - item_id: "sensory_disturbance"
+        subscale_id: "clinical_signs"
+        label: "感觉障碍（0=明显障碍，1=轻度障碍，2=无）"
+        min_value: 0
+        max_value: 2
+      - item_id: "motor_disturbance"
+        subscale_id: "clinical_signs"
+        label: "运动障碍/肌力减退（0=明显肌力减退0-3级，1=轻度4级，2=正常5级）"
+        min_value: 0
+        max_value: 2
+      - item_id: "adl_turning_in_bed"
+        subscale_id: "adl_restriction"
+        label: "卧床翻身（0=严重受限，1=中度受限，2=正常）"
+        min_value: 0
+        max_value: 2
+      - item_id: "adl_standing"
+        subscale_id: "adl_restriction"
+        label: "站立（0=严重受限，1=中度受限，2=正常）"
+        min_value: 0
+        max_value: 2
+      - item_id: "adl_washing"
+        subscale_id: "adl_restriction"
+        label: "洗漱（0=严重受限，1=中度受限，2=正常）"
+        min_value: 0
+        max_value: 2
+      - item_id: "adl_leaning_forward"
+        subscale_id: "adl_restriction"
+        label: "身体前屈（0=严重受限，1=中度受限，2=正常）"
+        min_value: 0
+        max_value: 2
+      - item_id: "adl_sitting"
+        subscale_id: "adl_restriction"
+        label: "坐位约1小时（0=严重受限，1=中度受限，2=正常）"
+        min_value: 0
+        max_value: 2
+      - item_id: "adl_lifting"
+        subscale_id: "adl_restriction"
+        label: "举重物或抱物（0=严重受限，1=中度受限，2=正常）"
+        min_value: 0
+        max_value: 2
+      - item_id: "adl_walking"
+        subscale_id: "adl_restriction"
+        label: "行走（0=严重受限，1=中度受限，2=正常）"
+        min_value: 0
+        max_value: 2
+      - item_id: "bladder_score"
+        subscale_id: "bladder_function"
+        label: "膀胱功能（-6=尿潴留/失禁，-3=排尿困难，0=正常）"
+        min_value: -6
+        max_value: 0
+        allowed_values: [-6, -3, 0]
+    severity_bands:
+      - label: "重度腰椎功能障碍"
+        min_score: -6
+        max_score: 10
+      - label: "中度腰椎功能障碍"
+        min_score: 11
+        max_score: 19
+      - label: "轻度腰椎功能障碍"
+        min_score: 20
+        max_score: 28
+      - label: "正常"
+        min_score: 29
+        max_score: 29
+    improvement_rate_formula: "(post_score - pre_score) / (29 - pre_score) * 100"
+    references:
+      - "日本骨科协会（JOA）下腰痛评价表（29 分制）"

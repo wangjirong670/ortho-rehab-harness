@@ -1,0 +1,365 @@
+version: "1.0.0"
+domain: "中医骨伤科与康复科"
+description: "骨伤/康复绝对红旗征与禁忌规则库。所有规则在投入临床辅助前需经执业医师逐条核对。"
+global_negation_terms:
+  - "无"
+  - "未见"
+  - "未诉"
+  - "否认"
+  - "排除"
+  - "阴性"
+  - "不伴"
+  - "无明显"
+  - "未出现"
+  - "已排除"
+
+rules:
+  - rule_id: "RF_001"
+    name: "脊髓型颈椎病/颈脊髓受压征象"
+    category: "手法与物理治疗禁忌"
+    severity: "critical"
+    review_status: "draft_for_clinician_review"
+    trigger_symptoms:
+      required_any:
+        - "踩棉花感"
+        - "走路发飘"
+        - "行走不稳"
+        - "下肢踩棉"
+        - "脊髓受压"
+        - "脊髓型颈椎病"
+        - "束带感"
+        - "霍夫曼征阳性"
+        - "Hoffmann征阳性"
+        - "病理征阳性"
+      supporting_any:
+        - "扣纽扣不灵"
+        - "系扣子困难"
+        - "持物易落"
+        - "精细动作障碍"
+        - "肌张力增高"
+        - "腱反射亢进"
+    negation_guards:
+      - "无踩棉花感"
+      - "否认踩棉花"
+      - "病理征阴性"
+      - "Hoffmann征阴性"
+      - "霍夫曼征阴性"
+    contraindicated_actions:
+      - "颈椎旋转扳法/高速低幅整复"
+      - "暴力斜扳或在家自行掰脖子复位"
+      - "大重量颈椎牵引"
+    recommended_action: "STOP_AND_REFER"
+    clinical_alert: "疑似脊髓型颈椎病/颈脊髓受压，严禁任何颈椎旋转扳法、暴力正骨或盲目牵引，存在高位截瘫风险！建议立即完善颈椎 MRI 并转诊脊柱骨科评估。"
+    clinical_rationale: "颈脊髓已处于临界受压状态，旋转或暴力复位可瞬间加重脊髓剪切与缺血性损伤，诱发急性脊髓损伤甚至截瘫。"
+    references:
+      - "《中医骨伤科学》（全国中医药行业高等教育规划教材）- 颈椎病章节"
+      - "颈椎病诊治与康复指南（脊髓型颈椎病手法禁忌）"
+
+  - rule_id: "RF_002"
+    name: "马尾综合征疑似征象"
+    category: "急诊转诊红线"
+    severity: "critical"
+    review_status: "draft_for_clinician_review"
+    trigger_symptoms:
+      required_any:
+        - "鞍区麻木"
+        - "会阴区麻木"
+        - "会阴部感觉减退"
+        - "大小便失禁"
+        - "二便失禁"
+        - "尿潴留"
+        - "排尿困难"
+        - "大便失禁"
+        - "马尾综合征"
+      supporting_any:
+        - "双下肢进行性无力"
+        - "足下垂"
+        - "腰椎间盘巨大突出"
+        - "肛门括约肌松弛"
+    negation_guards:
+      - "二便正常"
+      - "大小便正常"
+      - "无大小便失禁"
+      - "无鞍区麻木"
+      - "否认二便异常"
+    contraindicated_actions:
+      - "腰椎斜扳/踩跷/重手法推拿"
+      - "单纯保守理疗观察延误急诊减压"
+    recommended_action: "EMERGENCY_REFER"
+    clinical_alert: "高度怀疑马尾综合征（骨科急诊红旗）！严禁推拿正骨或保守观察延误，须立即急诊脊柱外科评估并尽快行腰椎 MRI 与手术减压评估。"
+    clinical_rationale: "马尾神经持续受压超过黄金时间窗易导致不可逆的括约肌功能与下肢运动功能丧失。"
+    references:
+      - "腰椎间盘突出症诊疗指南 - 马尾综合征急诊指征"
+      - "《实用骨科学》脊柱外科急症章节"
+
+  - rule_id: "RF_003"
+    name: "疑似急性骨折或关节脱位未排除"
+    category: "手法与负重禁忌"
+    severity: "critical"
+    review_status: "draft_for_clinician_review"
+    trigger_symptoms:
+      required_any:
+        - "骨擦音"
+        - "骨擦感"
+        - "异常活动"
+        - "关节畸形"
+        - "方肩畸形"
+        - "弹性固定"
+        - "疑似骨折"
+        - "怀疑骨折"
+        - "高处坠落"
+        - "车祸外伤"
+      supporting_any:
+        - "局部剧烈压痛"
+        - "纵向叩击痛阳性"
+        - "无法负重行走"
+        - "明显肿胀瘀斑"
+    negation_guards:
+      - "未见骨折线"
+      - "排除骨折"
+      - "X线未见骨折"
+      - "无畸形"
+      - "无骨擦感"
+    contraindicated_actions:
+      - "未经影像学确诊的推拿理筋与揉按"
+      - "非专业环境盲目复位或强行负重"
+    recommended_action: "STOP_AND_REFER"
+    clinical_alert: "存在急性骨折或关节脱位高危征象！影像学排除前严禁推拿按摩、盲目拉拽复位或尝试负重，须先行临时制动并完善 X 线/CT 检查。"
+    clinical_rationale: "未明确骨折线与移位情况前施用手法可导致骨折再移位、损伤伴行血管神经或使闭合性骨折转为开放性骨折。"
+    references:
+      - "《中医骨伤科学》骨折概论与急救制动原则"
+
+  - rule_id: "RF_004"
+    name: "疑似脊柱或骨骼恶性肿瘤/骨转移"
+    category: "手法与理疗禁忌"
+    severity: "critical"
+    review_status: "draft_for_clinician_review"
+    trigger_symptoms:
+      required_any:
+        - "夜间静息痛"
+        - "骨转移"
+        - "病理性骨折"
+        - "脊柱肿瘤"
+        - "骨肿瘤"
+        - "溶骨性破坏"
+      supporting_any:
+        - "不明原因消瘦"
+        - "体重明显下降"
+        - "既往肿瘤史"
+        - "乳腺癌病史"
+        - "肺癌病史"
+        - "前列腺癌病史"
+        - "平卧痛不缓解"
+    negation_guards:
+      - "无夜间痛"
+      - "否认肿瘤病史"
+      - "排除骨转移"
+    contraindicated_actions:
+      - "脊柱整复、重手法推拿与局部强刺激理疗"
+      - "局部深部透热理疗（如短波/超短波/热敷）"
+    recommended_action: "STOP_AND_REFER"
+    clinical_alert: "提示骨肿瘤或脊柱骨转移红旗征象！严禁手法整复及局部深部热疗，存在病理性骨折及加速播散风险，须尽快完善 MRI/骨扫描与肿瘤骨科评估。"
+    clinical_rationale: "骨质破坏区力学强度显著下降，外力整复极易诱发病理性骨折或脊髓压迫。"
+    references:
+      - "下腰痛临床诊疗指南 - 恶性肿瘤红旗筛查标准"
+
+  - rule_id: "RF_005"
+    name: "疑似脊柱/关节化脓性感染或骨关节结核"
+    category: "感染性红旗禁忌"
+    severity: "critical"
+    review_status: "draft_for_clinician_review"
+    trigger_symptoms:
+      required_any:
+        - "化脓性关节炎"
+        - "化脓性脊柱炎"
+        - "脊柱结核"
+        - "骨结核"
+        - "高热寒战"
+        - "椎间隙感染"
+      supporting_any:
+        - "低热盗汗"
+        - "发热"
+        - "关节红肿剧痛"
+        - "CRP显著升高"
+        - "血沉显著增快"
+        - "白细胞升高"
+        - "近期脊柱穿刺史"
+    negation_guards:
+      - "无发热"
+      - "否认结核病史"
+      - "排除感染"
+      - "体温正常"
+    contraindicated_actions:
+      - "局部推拿按摩、拔罐放血与热敷理疗"
+      - "未排除感染前的关节腔激素封闭注射"
+    recommended_action: "STOP_AND_REFER"
+    clinical_alert: "疑似骨关节化脓性感染或结核！严禁推拿、热敷及盲目局部封闭，须尽快完善血常规/CRP/ESR、影像学及感染/骨科专科处理。"
+    clinical_rationale: "推拿与热疗可促进局部血运导致感染扩散甚至脓毒血症，盲目激素封闭会掩盖并急剧加重感染。"
+    references:
+      - "《实用骨科学》骨与关节感染及骨结核诊疗原则"
+
+  - rule_id: "RF_006"
+    name: "疑似下肢深静脉血栓（DVT）"
+    category: "术后与制动康复红线"
+    severity: "critical"
+    review_status: "draft_for_clinician_review"
+    trigger_symptoms:
+      required_any:
+        - "深静脉血栓"
+        - "DVT"
+        - "单侧小腿肿胀"
+        - "腓肠肌压痛"
+        - "Homans征阳性"
+        - "霍曼征阳性"
+      supporting_any:
+        - "骨科术后"
+        - "长期卧床"
+        - "石膏制动"
+        - "皮温升高"
+        - "D-二聚体显著升高"
+        - "下肢周径明显增粗"
+    negation_guards:
+      - "排除DVT"
+      - "下肢血管彩超未见血栓"
+      - "无深静脉血栓"
+      - "Homans征阴性"
+    contraindicated_actions:
+      - "患肢推拿按摩、揉捏腓肠肌"
+      - "下肢间歇充气加压（气压治疗）与剧烈主动活动"
+    recommended_action: "EMERGENCY_REFER"
+    clinical_alert: "高度怀疑下肢深静脉血栓（DVT）！严禁按摩揉捏患肢或使用气压治疗，以免血栓脱落引发致命性肺栓塞（PE），须立即制动并急查下肢深静脉彩超与 D-二聚体。"
+    clinical_rationale: "机械挤压或剧烈肌肉收缩极易促使不稳定静脉血栓脱落，随血流进入肺动脉造成急性肺栓塞。"
+    references:
+      - "中国骨科大手术静脉血栓栓塞症预防指南"
+
+  - rule_id: "RF_007"
+    name: "前交叉韧带（ACL）重建术后早期过载红线"
+    category: "术后康复分期保护"
+    severity: "high"
+    review_status: "draft_for_clinician_review"
+    trigger_symptoms:
+      required_any:
+        - "ACL重建术后"
+        - "前交叉韧带重建术后"
+        - "前叉术后"
+      supporting_any:
+        - "术后1周"
+        - "术后2周"
+        - "术后3周"
+        - "术后4周"
+        - "提前弃拐"
+        - "全负重"
+        - "开链抗阻伸膝"
+        - "跑步"
+        - "急停变向"
+        - "深蹲"
+        - "合并半月板缝合"
+    negation_guards:
+      - "术后1年"
+      - "术后9个月已通过重返运动测试"
+    contraindicated_actions:
+      - "未经手术医师许可提前弃拐全负重（尤其合并半月板缝合时）"
+      - "术后早期大角度（0°-30°末段）大阻力开链伸膝训练"
+      - "早期跑跳、急停变向与高冲击运动"
+    recommended_action: "STOP_AND_VERIFY_PROTOCOL"
+    clinical_alert: "处于 ACL 重建术后移植物韧带化脆弱窗口期！禁止擅自提前弃拐全负重、早期大阻力开链伸膝或跑跳变向（若合并半月板缝合更须严格限制屈曲与负重），请严格核对手术医师的阶段性康复方案。"
+    clinical_rationale: "移植物早期经历坏死与再血管化重塑，过高前向剪切力或过早负荷易导致移植物松弛甚至断裂。"
+    references:
+      - "前交叉韧带重建术后康复临床实践指南（分期负荷保护原则）"
+
+  - rule_id: "RF_008"
+    name: "全髋关节置换术（THA）后外侧入路脱位禁忌体位"
+    category: "术后康复分期保护"
+    severity: "high"
+    review_status: "draft_for_clinician_review"
+    trigger_symptoms:
+      required_any:
+        - "全髋关节置换"
+        - "髋关节置换术后"
+        - "THA术后"
+        - "人工股骨头置换"
+      supporting_any:
+        - "后外侧入路"
+        - "翘二郎腿"
+        - "坐矮凳"
+        - "蹲便"
+        - "弯腰捡东西"
+        - "屈髋大于90度"
+        - "内收内旋"
+    negation_guards:
+      - "未行髋关节置换"
+    contraindicated_actions:
+      - "屈髋超过 90°（如坐矮凳、深蹲、弯腰系鞋带）"
+      - "患肢内收越过身体中线（如翘二郎腿、侧卧双腿间未夹枕）"
+      - "患髋大幅度内旋动作"
+    recommended_action: "CAUTION_AND_PROTECT"
+    clinical_alert: "全髋关节置换术后（尤其后外侧入路早期）存在假体后脱位高风险！严禁屈髋 >90°、内收过中线（翘二郎腿）及内旋动作，坐姿须使用增高垫并保持双膝分开。"
+    clinical_rationale: "术后早期后方关节囊与短外旋肌群尚未牢固愈合，屈髋内收内旋复合动作易使股骨头假体向后脱出髋臼。"
+    references:
+      - "全髋关节置换术后快速康复与体位管理专家共识"
+
+  - rule_id: "RF_009"
+    name: "重度骨质疏松或脊柱压缩骨折高风险禁暴力整复"
+    category: "手法与物理治疗禁忌"
+    severity: "high"
+    review_status: "draft_for_clinician_review"
+    trigger_symptoms:
+      required_any:
+        - "重度骨质疏松"
+        - "严重骨质疏松"
+        - "T值≤-2.5"
+        - "骨密度T值-3"
+        - "椎体压缩骨折"
+        - "脆性骨折"
+      supporting_any:
+        - "高龄"
+        - "绝经后"
+        - "长期使用激素"
+        - "腰背痛"
+        - "想做正骨"
+        - "斜扳"
+    negation_guards:
+      - "骨密度正常"
+      - "无骨质疏松"
+    contraindicated_actions:
+      - "脊柱高速低幅整脊、腰椎斜扳与踩跷手法"
+      - "暴力按压脊柱棘突或过度脊柱屈曲卷腹训练"
+    recommended_action: "STOP_AND_MODIFY_PLAN"
+    clinical_alert: "存在重度骨质疏松/脆性骨折高风险！严禁脊柱斜扳、踩跷及任何暴力正骨手法，也应避免剧烈屈曲卷腹，须改用轻柔理筋及规范抗骨质疏松治疗。"
+    clinical_rationale: "骨小梁稀疏变脆时，常规整脊扭矩即可诱发医源性肋骨骨折或胸腰椎压缩性骨折。"
+    references:
+      - "原发性骨质疏松症诊疗指南 - 运动与手法安全注意"
+
+  - rule_id: "RF_010"
+    name: "热痹急性期/急性痛风关节红肿热痛禁重灸热敷"
+    category: "中医辨证治疗禁忌"
+    severity: "high"
+    review_status: "draft_for_clinician_review"
+    trigger_symptoms:
+      required_any:
+        - "关节红肿热痛"
+        - "局部灼热"
+        - "皮温明显升高"
+        - "急性痛风"
+        - "热痹"
+        - "风湿热痹"
+      supporting_any:
+        - "剧痛拒按"
+        - "得冷则舒"
+        - "舌红苔黄腻"
+        - "尿酸升高"
+        - "第一跖趾关节红肿"
+    negation_guards:
+      - "局部不红不热"
+      - "皮温正常"
+      - "无红肿热痛"
+      - "得温痛减"
+    contraindicated_actions:
+      - "局部艾灸/重灸、热敷、红外线/烤灯热疗"
+      - "强行揉按患处及辛温燥热膏药外敷"
+    recommended_action: "STOP_AND_MODIFY_PLAN"
+    clinical_alert: "当前表现符合热痹/急性炎症充血期（红肿热痛）！严禁局部艾灸、热敷、烤灯或辛温药膏外敷（热证用热反助火毒、加重渗出剧痛），宜制动抬高、必要时冷敷并核查痛风/感染指标。"
+    clinical_rationale: "中医“热者寒之”，现代医学急性渗出期局部加温会扩张血管、加重组织水肿与炎性介质释放。"
+    references:
+      - "《中医骨伤科学》痹证（风湿热痹）辨证施治原则"
+      - "中国高尿酸血症与痛风诊疗指南 - 急性期非药物处理"

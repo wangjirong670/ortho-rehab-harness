@@ -1,0 +1,342 @@
+version: "1.0.0"
+domain: "中医骨伤科与康复科中西医结合用药安全"
+description: "骨伤/康复常见中西医结合用药冲突规则库。扫描器应结合药物状态（在用 vs 已停用及洗脱窗口）进行判定。"
+
+conflicts:
+  - conflict_id: "DC_001"
+    name: "华法林 + 活血化瘀/破血中药或中成药"
+    severity: "critical"
+    review_status: "draft_for_clinician_review"
+    group_a:
+      label: "维生素K拮抗剂（华法林）"
+      keywords:
+        - "华法林"
+        - "法华林"
+        - "Warfarin"
+      washout_window_days: 7
+    group_b:
+      label: "活血化瘀/破血类中药及骨伤中成药"
+      keywords:
+        - "三七"
+        - "田七"
+        - "丹参"
+        - "川芎"
+        - "红花"
+        - "桃仁"
+        - "水蛭"
+        - "土鳖虫"
+        - "跌打丸"
+        - "血府逐瘀"
+        - "云南白药"
+        - "活血止痛胶囊"
+        - "七厘散"
+        - "复方丹参滴丸"
+        - "银杏叶"
+    risk_mechanism: "华法林治疗窗极窄，多种活血化瘀中药（如丹参、三七、红花等）可抑制 CYP450 代谢或协同抗血小板/抗凝作用，导致 INR 剧烈波动及严重出血。"
+    clinical_alert: "高危出血冲突！华法林联用活血化瘀中药/骨伤跌打中成药可显著升高出血风险（消化道、皮下瘀斑甚至颅内出血），严禁自行叠加；若临床确需使用须经医师与药师评估并严密监测 INR。"
+    suggested_handling: "立即暂停未经审核的活血中成药/草药，核查近期 INR 指标并由主诊医师/临床药师复核方案。"
+    references:
+      - "华法林抗凝治疗的中国专家共识 - 中药相互作用章节"
+
+  - conflict_id: "DC_002"
+    name: "新型口服抗凝药（NOACs）+ 活血化瘀中药/骨伤中成药"
+    severity: "critical"
+    review_status: "draft_for_clinician_review"
+    group_a:
+      label: "新型口服抗凝药（DOACs/NOACs）"
+      keywords:
+        - "利伐沙班"
+        - "拜瑞妥"
+        - "阿哌沙班"
+        - "艾多沙班"
+        - "达比加群"
+        - "低分子肝素"
+        - "依诺肝素"
+      washout_window_days: 3
+    group_b:
+      label: "活血化瘀/通络类中药及骨伤中成药"
+      keywords:
+        - "三七"
+        - "丹参"
+        - "水蛭"
+        - "红花"
+        - "跌打丸"
+        - "活血止痛胶囊"
+        - "大活络丸"
+        - "龙血竭"
+        - "伤科接骨片"
+        - "盘龙七片"
+        - "血栓通"
+    risk_mechanism: "骨科术后（髋膝置换/骨折后）常常规服用利伐沙班等预防 DVT，叠加活血化瘀中药会产生药效学协同抗栓作用，显著增加术区血肿、切口渗血及消化道出血风险。"
+    clinical_alert: "高危术后出血预警！正在使用利伐沙班/达比加群等抗凝药期间，切勿叠加三七粉、跌打丸或活血中成药，易诱发关节腔血肿、切口渗血或消化道出血。"
+    suggested_handling: "核对骨科术后抗凝疗程，停止额外活血中药叠加，观察有无黑便、牙龈出血、切口渗血或大片瘀斑。"
+    references:
+      - "中国骨科大手术静脉血栓栓塞症预防指南"
+      - "直接口服抗凝药临床应用专家共识"
+
+  - conflict_id: "DC_003"
+    name: "抗血小板药（尤其双抗）+ 活血化瘀中药或大面积水杨酸类膏药"
+    severity: "high"
+    review_status: "draft_for_clinician_review"
+    group_a:
+      label: "抗血小板药物"
+      keywords:
+        - "阿司匹林"
+        - "拜阿司匹灵"
+        - "氯吡格雷"
+        - "波立维"
+        - "替格瑞洛"
+        - "西洛他唑"
+        - "双抗"
+      washout_window_days: 7
+    group_b:
+      label: "活血化瘀中药及含水杨酸甲酯外用膏贴"
+      keywords:
+        - "三七"
+        - "丹参"
+        - "红花"
+        - "银杏叶"
+        - "跌打丸"
+        - "活血止痛"
+        - "伤湿止痛膏"
+        - "水杨酸甲酯"
+        - "冬青油"
+    risk_mechanism: "阿司匹林/氯吡格雷不可逆抑制血小板聚集，叠加活血化瘀中药或大面积长时间外敷水杨酸类贴膏可增加消化道黏膜出血及皮下瘀斑风险。"
+    clinical_alert: "用药出血风险提示！长期服用阿司匹林/氯吡格雷等抗血小板药（尤其支架术后双抗）时，叠加活血中药或大面积水杨酸膏药易增加出血风险，须由医师评估获益与风险。"
+    suggested_handling: "评估是否有必要联用活血中药；避免破损皮肤或大面积多片贴敷水杨酸类膏药，注意观察消化道及皮肤出血倾向。"
+    references:
+      - "抗血小板药物消化道损伤的预防和治疗中国专家共识"
+
+  - conflict_id: "DC_004"
+    name: "口服 NSAIDs 重复联用或叠加含 NSAIDs/水杨酸的中西复方"
+    severity: "high"
+    review_status: "draft_for_clinician_review"
+    group_a:
+      label: "口服非甾体抗炎药（NSAIDs）"
+      keywords:
+        - "布洛芬"
+        - "双氯芬酸"
+        - "扶他林片"
+        - "塞来昔布"
+        - "西乐葆"
+        - "洛索洛芬"
+        - "美洛昔康"
+        - "依托考昔"
+        - "吲哚美辛"
+        - "氨酚双氢可待因"
+      washout_window_days: 2
+    group_b:
+      label: "含西药解热镇痛成分的中西复方或第二种口服 NSAIDs"
+      keywords:
+        - "维C银翘片"
+        - "感冒灵"
+        - "腰痛宁"
+        - "阿司匹林"
+        - "双氯芬酸"
+        - "塞来昔布"
+        - "布洛芬"
+        - "洛索洛芬"
+        - "依托考昔"
+        - "复方对乙酰氨基酚"
+        - "去痛片"
+    risk_mechanism: "同服多种口服 NSAIDs 不会明显提升镇痛疗效，反而成倍增加消化道溃疡穿孔、上消化道出血及急性肾损伤（AKI）风险。"
+    clinical_alert: "禁止重复联用口服 NSAIDs！同时服用多种止痛抗炎药或隐含解热镇痛成分的复方制剂，会成倍放大胃出血与肾损伤风险。"
+    suggested_handling: "梳理患者全部在用口服与外用止痛药清单，仅保留单一最小有效剂量的口服 NSAIDs，高危人群评估加用 PPI 护胃。"
+    references:
+      - "骨关节炎诊疗指南 - NSAIDs 合理用药规范"
+
+  - conflict_id: "DC_005"
+    name: "口服 NSAIDs + 全身性糖皮质激素"
+    severity: "high"
+    review_status: "draft_for_clinician_review"
+    group_a:
+      label: "口服非甾体抗炎药（NSAIDs）"
+      keywords:
+        - "布洛芬"
+        - "双氯芬酸"
+        - "洛索洛芬"
+        - "美洛昔康"
+        - "吲哚美辛"
+        - "依托考昔"
+        - "塞来昔布"
+      washout_window_days: 2
+    group_b:
+      label: "全身性糖皮质激素"
+      keywords:
+        - "泼尼松"
+        - "强的松"
+        - "甲泼尼龙"
+        - "美卓乐"
+        - "地塞米松"
+        - "氢化可的松"
+        - "倍他米松"
+    risk_mechanism: "NSAIDs 抑制前列腺素削弱胃黏膜屏障，糖皮质激素抑制黏膜修复，二者联用使消化性溃疡及上消化道出血风险显著倍增。"
+    clinical_alert: "消化道出血高危组合！口服 NSAIDs 联用泼尼松/地塞米松等糖皮质激素可显著诱发胃十二指肠溃疡甚至穿孔出血，原则上应避免联用。"
+    suggested_handling: "如非必要避免同时使用；确需短期联用者必须经医师评估并常规联合质子泵抑制剂（PPI）保护胃黏膜。"
+    references:
+      - "糖皮质激素类药物临床应用指导原则"
+
+  - conflict_id: "DC_006"
+    name: "口服 NSAIDs + 抗凝药"
+    severity: "critical"
+    review_status: "draft_for_clinician_review"
+    group_a:
+      label: "口服非甾体抗炎药（NSAIDs）"
+      keywords:
+        - "布洛芬"
+        - "双氯芬酸"
+        - "洛索洛芬"
+        - "美洛昔康"
+        - "吲哚美辛"
+        - "依托考昔"
+        - "塞来昔布"
+      washout_window_days: 2
+    group_b:
+      label: "抗凝药物"
+      keywords:
+        - "华法林"
+        - "利伐沙班"
+        - "阿哌沙班"
+        - "达比加群"
+        - "艾多沙班"
+        - "低分子肝素"
+    risk_mechanism: "NSAIDs 造成胃肠道黏膜糜烂及血小板功能抑制，在抗凝药物背景下极易引发难以控制的消化道大出血。"
+    clinical_alert: "严重出血禁忌警告！口服 NSAIDs 与华法林/利伐沙班等抗凝药联用属于临床高危相互作用，极易引发上消化道大出血。"
+    suggested_handling: "优先改用非 NSAIDs 镇痛方式或局部外用止痛策略；若临床不可避免，须由医师严密评估并加用胃黏膜保护方案。"
+    references:
+      - "非甾体抗炎药相关消化道损伤预防共识"
+
+  - conflict_id: "DC_007"
+    name: "含乌头碱类骨伤中药制剂叠加或配合自制药酒"
+    severity: "critical"
+    review_status: "draft_for_clinician_review"
+    group_a:
+      label: "含乌头碱类中药及中成药（风寒湿痹常用）"
+      keywords:
+        - "生川乌"
+        - "生草乌"
+        - "制川乌"
+        - "制草乌"
+        - "附子"
+        - "雪上一枝蒿"
+        - "小活络丸"
+        - "追风透骨丸"
+        - "风湿骨痛胶囊"
+        - "盘龙七片"
+        - "云南白药"
+      washout_window_days: 2
+    group_b:
+      label: "同类含乌头碱制剂、药酒/乙醇或洋地黄类强心药"
+      keywords:
+        - "药酒"
+        - "白酒"
+        - "饮酒"
+        - "小活络丸"
+        - "追风透骨丸"
+        - "附子理中丸"
+        - "金匮肾气丸"
+        - "地高辛"
+        - "川乌"
+        - "草乌"
+    risk_mechanism: "乌头碱类成分具有极强心脏与神经毒性，乙醇可加速乌头碱溶出与吸收，多方叠加或与洋地黄类联用极易诱发口舌麻木、恶性室性心律失常甚至心跳骤停。"
+    clinical_alert: "剧毒成分蓄积预警！含川乌/草乌/附子/雪上一枝蒿制剂严禁多品种叠加服用，更严禁配合白酒/自制药酒冲服，警惕口唇四肢发麻与致命心律失常。"
+    suggested_handling: "核查全部中成药与汤剂成分表，剔除重复含乌头类药物，严格禁酒并核查炮制煎煮规范；一旦出现口周发麻、心悸立即急诊。"
+    references:
+      - "《中华人民共和国药典》毒性饮片临床使用警示"
+
+  - conflict_id: "DC_008"
+    name: "含马钱子（番木鳖碱）骨伤中成药叠加或与乙醇/中枢兴奋剂联用"
+    severity: "critical"
+    review_status: "draft_for_clinician_review"
+    group_a:
+      label: "含马钱子/制马钱子骨伤制剂"
+      keywords:
+        - "马钱子"
+        - "腰痛宁胶囊"
+        - "舒筋活络丸"
+        - "疏风定痛丸"
+        - "九分散"
+        - "伤科七味片"
+        - "骨刺消痛液"
+      washout_window_days: 3
+    group_b:
+      label: "重复含马钱子制剂、含乙醇饮品或麻黄碱类药物"
+      keywords:
+        - "腰痛宁"
+        - "疏风定痛丸"
+        - "九分散"
+        - "舒筋活络丸"
+        - "白酒"
+        - "药酒"
+        - "麻黄"
+        - "麻黄碱"
+        - "氨茶碱"
+    risk_mechanism: "士的宁（番木鳖碱）治疗窗极窄且排泄较慢，同类复方叠加或过量可兴奋脊髓反射中枢，导致颈项强直、角弓反张与呼吸肌痉挛。"
+    clinical_alert: "窄治疗窗神经毒性预警！腰痛宁/疏风定痛丸等含马钱子中成药严禁超剂量或与其他含马钱子制剂联用（注意：部分品种说明书虽以少量黄酒送服，但严禁过量饮酒或叠服多种含马钱子药物）。"
+    suggested_handling: "严格核对单日马钱子总摄入量，避免同类叠服，肝肾功能不全、高血压及癫痫史患者慎用/禁用。"
+    references:
+      - "《中华人民共和国药典》制马钱子项下注意与中成药临床合理用药规范"
+
+  - conflict_id: "DC_009"
+    name: "含朱砂/雄黄类骨伤制剂长期叠加或破溃皮肤大面积外用"
+    severity: "high"
+    review_status: "draft_for_clinician_review"
+    group_a:
+      label: "含朱砂/雄黄类骨伤中成药或外敷散"
+      keywords:
+        - "朱砂"
+        - "雄黄"
+        - "七厘散"
+        - "跌打七厘片"
+        - "活血止痛散"
+        - "紫金锭"
+        - "大活络丹"
+      washout_window_days: 7
+    group_b:
+      label: "皮肤破溃/长期超疗程服用/含溴碘类药物"
+      keywords:
+        - "皮肤破溃"
+        - "开放性伤口"
+        - "长期服用"
+        - "连服数月"
+        - "溴化物"
+        - "碘化钾"
+        - "肝肾功能不全"
+    risk_mechanism: "朱砂含硫化汞、雄黄含二硫化二砷，长期叠加使用或在破溃创面大面积外敷可导致汞/砷重金属吸收蓄积及肝肾损害。"
+    clinical_alert: "重金属蓄积风险提示！含朱砂/雄黄类骨伤制剂不可超疗程长期服用，亦不可大面积外敷于破溃皮肤，肝肾功能不全者慎用。"
+    suggested_handling: "核查用药时长与皮肤完整性，中病即止，必要时监测肝肾功能。"
+    references:
+      - "《中华人民共和国药典》含朱砂/雄黄中成药安全警示"
+
+  - conflict_id: "DC_010"
+    name: "中枢肌松药/神经痛药物/阿片类镇痛药 + 含乙醇骨伤药酒"
+    severity: "high"
+    review_status: "draft_for_clinician_review"
+    group_a:
+      label: "中枢神经系统抑制类骨伤常用药"
+      keywords:
+        - "乙哌立松"
+        - "妙纳"
+        - "替扎尼定"
+        - "氯唑沙宗"
+        - "普瑞巴林"
+        - "加巴喷丁"
+        - "曲马多"
+        - "氨酚羟考酮"
+        - "艾司唑仑"
+      washout_window_days: 2
+    group_b:
+      label: "含乙醇药酒/饮酒"
+      keywords:
+        - "药酒"
+        - "活血酒"
+        - "风湿药酒"
+        - "白酒"
+        - "黄酒"
+        - "饮酒"
+        - "红花酒"
+    risk_mechanism: "乙醇与中枢性肌松药、神经病理性疼痛药物及阿片类镇痛药产生叠加中枢抑制，极易诱发严重嗜睡、体位性低血压、共济失调及老年骨伤患者二次跌倒骨折。"
+    clinical_alert: "高危跌倒与中枢抑制警告！服用肌松药（乙哌立松/替扎尼定）、神经痛药（普瑞巴林/加巴喷丁）或曲马多期间，严禁同时饮用骨伤药酒或含酒精饮品。"
+    suggested_handling: "明确告知患者服药期间严格戒酒及停用内服药酒，尤其警惕老年人夜间起夜跌倒风险。"
+    references:
+      - "老年人跌倒风险评估与骨科围术期镇痛安全管理专家共识"

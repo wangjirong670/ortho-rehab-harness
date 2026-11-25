@@ -1,0 +1,33 @@
+# Secrets & local env (preserve .env.example)
+.env
+.env.*
+!.env.example
+*.secret
+
+# Private benchmark cases (anti-leakage isolation)
+app_benchmark/test_cases/private/*
+!app_benchmark/test_cases/private/README.md
+!app_benchmark/test_cases/private/.gitkeep
+app_benchmark/outputs/
+app_benchmark/reports/
+# Benchmark run artifacts
+app_benchmark/results/*.json
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
