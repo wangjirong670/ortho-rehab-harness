@@ -1,9 +1,15 @@
 """Unit tests for core_tools/rule_scanner.py (dual-track red flags & drug conflicts)."""
 
+import pytest
+
 from core_tools.rule_scanner import (
     check_negation_context,
+    find_stop_drug_marker,
+    is_context_negated,
     load_red_flags_catalog,
+    parse_duration_days,
     scan_clinical_risks,
+    strip_quoted_segments,
 )
 
 
@@ -122,8 +128,8 @@ def test_text_drug_stopped_within_washout_still_alerts() -> None:
 
 
 def test_track_b_structured_facts_polarity_and_washout_precedence() -> None:
-    # Structured absent symptom overrides raw_text mention; stopped_days_ago > washout suppresses DC_001
-    raw_text = "病历提及踩棉花感待评估；既往曾用华法林，现用三七粉。"
+    # Corroborated absent symptom (with latest text negation) & valid stopped_days_ago > washout suppress cleanly
+    raw_text = "既往曾怀疑踩棉花感，今日查体否认踩棉花感；已停用华法林半年，现用三七粉。"
     structured_facts = {
         "symptoms": [
             {"name": "踩棉花感", "polarity": "absent"},
@@ -162,3 +168,150 @@ def test_track_b_structured_facts_active_and_in_washout_triggers_alerts() -> Non
     assert "RF_001" in ids
     assert "DC_001" in ids
     assert all(a["source"] == "structured_facts" for a in report["alerts"])
+
+
+# ==============================================================================
+# P0-1 / P0-3 / P1-7 / P2-1 / P2-3 Adversarial Regression Tests
+# ==============================================================================
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_rule_id"),
+    [
+        ("患者无明显诱因出现踩棉花感，伴扣纽扣不灵。", "RF_001"),
+        ("双下肢无力伴走路踩棉花感。", "RF_001"),
+        ("不排除马尾综合征。", "RF_002"),
+        ("尚不能排除脊髓型颈椎病。", "RF_001"),
+        ("不能排除脊髓受压。", "RF_001"),
+        ("并非无大小便失禁。", "RF_002"),
+        ("鞍区麻木未见缓解。", "RF_002"),
+        ("尿潴留未见好转。", "RF_002"),
+        ("此前无明显不适近1周出现踩棉花感。", "RF_001"),
+        ("无外伤史但近1周出现鞍区麻木。", "RF_002"),
+        ("无外伤但出现鞍区麻木。", "RF_002"),
+        ("毫无疑问该患者近日出现排尿困难。", "RF_002"),
+        ("否认高血压糖尿病：今突发尿潴留。", "RF_002"),
+        ("霍夫曼征阳性双侧腱反射正常。", "RF_001"),
+        ("MRI排除骨折后出现尿潴留。", "RF_002"),
+        ("否认发热盗汗伴夜间静息痛加重。", "RF_004"),
+        ("此前无明显不适，近1周出现踩棉花感。", "RF_001"),
+    ],
+)
+def test_negation_window_keeps_affirmative_red_flags(text: str, expected_rule_id: str) -> None:
+    report = scan_clinical_risks(raw_text=text)
+    assert expected_rule_id in _alert_ids(report), f"Expected {expected_rule_id} for: {text}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "否认踩棉花感，霍夫曼征阴性。",
+        "无二便失禁",
+        "未出现发热或踩棉花感。",
+        "未见新发鞍区麻木。",
+    ],
+)
+def test_negation_window_controls_remain_negative(text: str) -> None:
+    report = scan_clinical_risks(raw_text=text)
+    assert report["alerts"] == [], f"Unexpected alerts for negative control: {text}"
+
+
+def test_stop_marker_scope_and_resume() -> None:
+    # 1. Cross-drug isolation: warfarin stopped 3 months, switched to rivaroxaban + notoginseng -> DC_002
+    rep1 = scan_clinical_risks(raw_text="华法林已停3月改用利伐沙班抗凝，今日自行加服三七粉。")
+    assert "DC_002" in _alert_ids(rep1)
+    assert "DC_001" not in _alert_ids(rep1)
+
+    # 2. Negated stop phrasing with regular use duration -> DC_001 must fire
+    rep2 = scan_clinical_risks(raw_text="医生叮嘱切勿自行停用华法林，已规律服用6个月，今日扭伤加服三七粉。")
+    assert "DC_001" in _alert_ids(rep2)
+
+    # 3. Stopped then resumed -> DC_001 must fire
+    rep3 = scan_clinical_risks(raw_text="华法林停药10天后已于昨日恢复服用，今日加服三七粉。")
+    assert "DC_001" in _alert_ids(rep3)
+
+    # 4. Function-level stop marker & planned stop exclusions
+    assert find_stop_drug_marker("千万别停用华法林") is None
+    assert find_stop_drug_marker("华法林没停药") is None
+    assert find_stop_drug_marker("建议择期停用华法林") is None
+    assert find_stop_drug_marker("别停药") is None
+    assert find_stop_drug_marker("至嘱勿自行停用") is None
+    assert find_stop_drug_marker("华法林停药10天后已于昨日恢复服用") is None
+    assert find_stop_drug_marker("已停用华法林半年") in ("停用", "已停")
+
+    # 5. Duration parser fixes
+    assert parse_duration_days("一周半") == 10.5
+    assert parse_duration_days("1个半月") == 45.0
+    assert parse_duration_days("一个半月") == 45.0
+    assert parse_duration_days("72小时") == 3.0
+
+    # 6. Washout boundary preserved (7 days alerts, 8 days suppressed, vague duration conservative)
+    assert "DC_001" in _alert_ids(scan_clinical_risks(raw_text="停用华法林7天，今日口服三七粉。"))
+    assert "DC_001" not in _alert_ids(scan_clinical_risks(raw_text="停用华法林8天，今日口服三七粉。"))
+    assert "DC_001" in _alert_ids(scan_clinical_risks(raw_text="前天刚停用华法林，今日口服三七粉。"))
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_rule_id"),
+    [
+        ("腰突患者近2天出现尿失禁，伴会阴麻木。", "RF_002"),
+        ("腰椎管狭窄，近1周二便功能障碍，小便费力。", "RF_002"),
+        ("查体：Hoffmann(+)，双侧病理征(+)，腱反射亢进。", "RF_001"),
+        ("这两天脚底发飘像踩海绵，扣扣子费劲，筷子拿不稳。", "RF_001"),
+        ("搬重物后腰痛，屁股发木解不出尿半天了。", "RF_002"),
+        ("女，70岁，T值-3.2，腰背痛，想正骨。", "RF_009"),
+        ("腰痛伴新发足下垂3天，无法背伸。", "RF_002"),
+    ],
+)
+def test_p1_7_red_flag_keyword_and_regex_gaps(text: str, expected_rule_id: str) -> None:
+    report = scan_clinical_risks(raw_text=text)
+    assert expected_rule_id in _alert_ids(report)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "30岁程序员，久坐后屁股麻，没有腿麻，走路有力气，大小便正常，腰有点酸。",
+        "学生，上课常憋尿，最近腰酸，请问怎么护腰？",
+        "开会久坐会阴有点闷，小便正常，腰肌紧张。",
+    ],
+)
+def test_p1_5_colloquial_negative_counterexamples_zero_false_positives(text: str) -> None:
+    report = scan_clinical_risks(raw_text=text)
+    assert report["alerts"] == []
+
+
+def test_p2_1_false_positives_suppressed_and_p2_3_new_rules() -> None:
+    # P2-1: remote trauma & long-term post-ACL & misclassified tramadol/codeine combo
+    assert "RF_003" not in _alert_ids(scan_clinical_risks(raw_text="2年前车祸外伤史，已痊愈，现颈肩僵痛。"))
+    assert "RF_007" not in _alert_ids(scan_clinical_risks(raw_text="ACL重建术后2年，现腰痛。"))
+    assert "RF_007" not in _alert_ids(scan_clinical_risks(raw_text="前叉重建术后两年以上，现偶有酸胀。"))
+    assert "DC_004" not in _alert_ids(scan_clinical_risks(raw_text="口服氨酚双氢可待因联合布洛芬镇痛。"))
+
+    # P2-3: DC_011 (antithrombotic active or in-washout + invasive procedure)
+    assert "DC_011" in _alert_ids(scan_clinical_risks(raw_text="房颤长期口服华法林，今日要求小针刀松解。"))
+    assert "DC_011" in _alert_ids(scan_clinical_risks(raw_text="冠脉支架术后停用氯吡格雷3天，今日要求行小针刀松解。"))
+    assert "DC_011" in _alert_ids(scan_clinical_risks(raw_text="氯吡格雷停药7天，要求小针刀治疗。"))
+    assert "DC_011" not in _alert_ids(scan_clinical_risks(raw_text="氯吡格雷停药8天，要求小针刀治疗。"))
+
+    # P2-3: RF_011..RF_016
+    assert "RF_011" in _alert_ids(scan_clinical_risks(raw_text="3年前行颈椎前路融合内固定术（ACDF），今落枕想做旋转斜扳。"))
+    assert "RF_012" in _alert_ids(scan_clinical_risks(raw_text="强直性脊柱炎呈竹节样脊柱改变，腰背僵硬要求正骨。"))
+    assert "RF_013" in _alert_ids(scan_clinical_risks(raw_text="下肢深静脉血栓（DVT）患者今日突发胸痛伴呼吸困难、咯血。"))
+    assert "RF_014" in _alert_ids(scan_clinical_risks(raw_text="昨晚颈椎旋转复位正骨后今晨突发眩晕伴复视、构音障碍。"))
+    assert "RF_015" in _alert_ids(scan_clinical_risks(raw_text="腰椎间盘突出伴双下肢进行性肌力下降3天。"))
+    assert "RF_016" in _alert_ids(scan_clinical_risks(raw_text="患者怀孕16周，腰痛要求腰骶部拔罐和口服布洛芬。"))
+
+
+def test_exported_negation_and_quote_helpers() -> None:
+    quoted = "很多患者想「明天再去」，但马尾综合征不能等，请立即急诊。"
+    stripped = strip_quoted_segments(quoted)
+    assert "明天再去" not in stripped
+
+    safe_reply = "踩棉花感提示脊髓受压，严禁在家自行复位，也不可以去推拿馆做旋转复位。"
+    idx = safe_reply.index("去推拿馆做旋转复位")
+    assert is_context_negated(safe_reply, idx, idx + len("去推拿馆做旋转复位")) is True
+
+    bypass_reply = "无需手术可以去推拿馆做旋转复位，禁忌谈不上。"
+    idx2 = bypass_reply.index("去推拿馆做旋转复位")
+    assert is_context_negated(bypass_reply, idx2, idx2 + len("去推拿馆做旋转复位")) is False

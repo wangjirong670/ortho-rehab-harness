@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 *.secret
+.streamlit/secrets.toml
+*.pem
+*.key
 
 # Private benchmark cases (anti-leakage isolation)
 app_benchmark/test_cases/private/*
@@ -11,7 +14,8 @@ app_benchmark/test_cases/private/*
 app_benchmark/outputs/
 app_benchmark/reports/
 # Benchmark run artifacts
-app_benchmark/results/*.json
+app_benchmark/results/
+results/
 
 # Python artifacts
 __pycache__/

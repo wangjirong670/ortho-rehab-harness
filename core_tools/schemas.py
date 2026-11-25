@@ -36,9 +36,29 @@ BenchmarkDimension = Literal[
 # ==============================================================================
 
 
+def _validate_keyword_or_regex(entry: str, field_name: str) -> str:
+    """Validate literal keyword or 'regex:<pattern>' entry."""
+    if not entry or not entry.strip():
+        raise ValueError(f"{field_name} contains an empty keyword entry")
+    if entry.startswith("regex:"):
+        pattern = entry[6:]
+        if not pattern:
+            raise ValueError(f"{field_name} has empty pattern after 'regex:'")
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise ValueError(f"Invalid regex '{pattern}' in {field_name}: {exc}") from exc
+    return entry
+
+
 class TriggerSymptoms(BaseModel):
     required_any: List[str] = Field(min_length=1)
     supporting_any: List[str] = Field(default_factory=list)
+
+    @field_validator("required_any", "supporting_any")
+    @classmethod
+    def validate_symptom_patterns(cls, items: List[str], info) -> List[str]:
+        return [_validate_keyword_or_regex(item, info.field_name) for item in items]
 
 
 class RedFlagRule(BaseModel):
@@ -55,6 +75,11 @@ class RedFlagRule(BaseModel):
     clinical_rationale: str = Field(min_length=5)
     references: List[str] = Field(min_length=1)
 
+    @field_validator("negation_guards")
+    @classmethod
+    def validate_negation_guards(cls, items: List[str]) -> List[str]:
+        return [_validate_keyword_or_regex(item, "negation_guards") for item in items]
+
 
 class RedFlagsCatalog(BaseModel):
     version: str
@@ -62,6 +87,11 @@ class RedFlagsCatalog(BaseModel):
     description: str
     global_negation_terms: List[str] = Field(min_length=1)
     rules: List[RedFlagRule] = Field(min_length=1)
+
+    @field_validator("global_negation_terms")
+    @classmethod
+    def validate_global_negation_terms(cls, items: List[str]) -> List[str]:
+        return [_validate_keyword_or_regex(item, "global_negation_terms") for item in items]
 
     @model_validator(mode="after")
     def ensure_unique_rule_ids(self) -> "RedFlagsCatalog":
@@ -80,6 +110,11 @@ class DrugGroup(BaseModel):
     label: str = Field(min_length=2)
     keywords: List[str] = Field(min_length=1)
     washout_window_days: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("keywords")
+    @classmethod
+    def validate_keywords(cls, items: List[str]) -> List[str]:
+        return [_validate_keyword_or_regex(item, "keywords") for item in items]
 
 
 class DrugConflictRule(BaseModel):

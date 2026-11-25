@@ -77,7 +77,7 @@
 | **加装 Harness 护栏的 Copilot** | **`待实测填入`** | **`待实测填入`** | **`待实测填入`** | **`待实测填入`** |
 
 > [!TIP]
-> **零成本离线复现基线**：无需任何 API Key，设置 `LLM_MOCK_MODE=true` 即可一键复现内置 20 题 Mock 基线对照（含 `bare_llm` 典型翻车样本 `70.0%` 总通过率 vs `harness_copilot` `100.0%` 四维全通），用于离线验收整套规则与评测链路。
+> **零成本离线脚本化演示（Mock，非真实模型评测结果）**：无需任何 API Key，设置 `LLM_MOCK_MODE=true` 即可一键复现内置 20 题脚本化演示基线对照（其中 `bare_llm` 与 `harness_copilot` 的 `70.0%` vs `100.0%` 仅为预设脚本化 Mock 演示分数，非真实大模型评测结果），用于离线验收整套规则与评测链路。
 
 ---
 
@@ -181,7 +181,7 @@ ortho-rehab-harness/
 ├── LICENSE
 ├── requirements.txt
 ├── .env.example                       # 多模型 LiteLLM 环境变量模板
-├── .gitignore                         # 屏蔽 .env、private/*、results/*.json 与 .venv/
+├── .gitignore                         # 屏蔽 .env、private/*、results/ 与 .venv/
 ├── docs/
 │   ├── blueprint.md                   # 工程蓝图与分周验收约束
 │   └── assets/                        # 演示截图占位目录
@@ -203,7 +203,7 @@ ortho-rehab-harness/
 │   ├── test_cases/
 │   │   ├── public/                    # 公开评测集（20 道：001–020）
 │   │   └── private/                   # 私有防泄漏集（除 README/.gitkeep 外全部忽略）
-│   ├── results/                       # 评测 JSON 报告输出目录（*.json 已忽略）
+│   ├── results/                       # 评测 JSON 报告输出目录（整目录已忽略）
 │   ├── runner.py                      # 多轮批量评测执行器（bare_llm vs harness_copilot）
 │   ├── evaluator.py                   # 纯 Python 四维确定性判分器
 │   └── streamlit_bench.py             # 对比看板与翻车回放 UI

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import copy
+import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -72,6 +73,196 @@ def describe_score_direction(score_direction: Optional[str]) -> str:
     return SCORE_DIRECTION_LABELS.get(score_direction, score_direction)
 
 
+def sanitize_error_message(message: Any) -> str:
+    """Redact API keys, Bearer tokens, and secret query params before UI rendering."""
+    text = str(message or "")
+    text = re.sub(r"sk-[A-Za-z0-9_*-]+", "sk-***", text)
+    text = re.sub(r"AIza[0-9A-Za-z_-]{10,}", "AIza***", text)
+    text = re.sub(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1***", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"((?:api[_-]?key|secret[_-]?key|access[_-]?token|authorization)\s*[:=]\s*[\"']?)[^\s\"',;]+",
+        r"\1***",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"([?&](?:api_key|key|token)=)[^&\s]+", r"\1***", text, flags=re.IGNORECASE)
+    return text
+
+
+_HIGH_RISK_DRAFT_ACTION_PATTERNS: Tuple[Tuple[str, str], ...] = (
+    ("旋转扳法/正骨复位", r"(?:颈椎|腰椎)?旋转(?:扳法|复位|整复)|斜扳|踩跷|正骨|整脊|高速低幅整复|掰脖子|在家自行复位"),
+    ("推拿按摩", r"推拿|按摩|揉按|揉捏(?:腓肠肌)?|重手法"),
+    ("热敷/重灸/热疗", r"热敷|重灸|艾灸|烤灯|红外线|超短波|短波|透热理疗"),
+    ("提前弃拐/全负重/跑跳", r"(?:提前)?(?:丢拐|弃拐)(?:全)?负重|全负重|跑跳|急停变向|绑沙袋|开链(?:抗阻)?伸膝"),
+    ("有创操作(小针刀/封闭)", r"小针刀|针刀|封闭注射|激素封闭|拔罐放血"),
+    ("脱位高危体位", r"屈髋(?:大于|超过|>)\s*90|坐矮凳|翘二郎腿|盘腿打坐|大幅度内旋"),
+    ("禁忌脊柱牵引", r"(?:大重量|暴力|颈椎|腰椎|脊柱)牵引"),
+    ("冲突药物继续同服", r"(?:继续|同时|联合|一起|共同)(?:同服|服用|合用|叠加|吃)|继续同服|同时服用|联合服用|继续叠加|一起吃"),
+)
+
+_DRAFT_PROHIBITION_LINE_HEADER_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?(?:绝对禁忌操作|绝对禁忌|禁忌清单|禁忌操作|禁忌项目|安全红线|严禁以下)"
+)
+_DRAFT_PRE_PROHIBITION_RE = re.compile(
+    r"(?:严禁|禁止|切勿|切忌|绝不可|绝不能|不得|不可以|不可|不能|不要|不建议|不推荐|不予|不宜|避免|禁忌|暂缓|停止|暂停|杜绝|严防|勿|忌)"
+)
+_DRAFT_POST_PROHIBITION_RE = re.compile(
+    r"(?:是不?可取的|是不允许的|均属禁忌|属禁忌|均禁止|均严禁|不可以|不行|不可|不得|禁止|严禁|禁忌|应避免|需避免|要避免)"
+)
+_DRAFT_AFFIRMATIVE_RE = re.compile(
+    r"(?<![不未勿禁绝])(?:可行|可以|能够|可尝试|可做|可适当|直接做|直接行|安排|推荐|建议行|建议做|建议安排|建议尝试|建议开展|试试|就行|即可|无妨|照常|没问题|没关系|尽管|不妨)"
+)
+_DRAFT_RIGHT_AFFIRMATIVE_RE = re.compile(
+    r"(?:可行|可以|就行|即可|无妨|试试|没问题|没关系|照常)"
+)
+_DRAFT_DOUBLE_NEG_PROHIBITION_RE = re.compile(
+    r"(?:并非|不是|无需|不必|谈不上|没有)[^，。；\n]{0,6}?(?:禁止|严禁|禁忌|不可|不能)"
+)
+_CONTRA_PREFIX_NOISE_RE = re.compile(
+    r"^(?:未排除感染前的|未经手术医师许可(?:提前)?|未经影像学确诊的|非专业环境|术后早期|早期|局部|患肢|大面积多片|盲目|暴力|强行)"
+)
+
+
+def _extract_alert_action_terms(alerts: List[Dict[str, Any]]) -> List[Tuple[str, str, str]]:
+    """Collect (rule_id, rule_name, regex_pattern) tuples from active alerts and high-risk action library."""
+    items: List[Tuple[str, str, str]] = []
+    seen_patterns = set()
+
+    for alert in alerts:
+        if not isinstance(alert, dict):
+            continue
+        rule_id = str(alert.get("rule_id") or "ALERT")
+        rule_name = str(alert.get("name") or "")
+        for raw_action in alert.get("contraindicated_actions") or []:
+            action_text = str(raw_action or "").strip()
+            if not action_text:
+                continue
+            for part in re.split(r"[（()）/\s、，,;；或及与]+", action_text):
+                token = _CONTRA_PREFIX_NOISE_RE.sub("", part.strip()).strip()
+                if len(token) >= 2 and token not in {"训练", "动作", "运动", "治疗", "药物", "用药", "外敷", "观察"}:
+                    pat = re.escape(token)
+                    if (rule_id, pat) not in seen_patterns:
+                        seen_patterns.add((rule_id, pat))
+                        items.append((rule_id, rule_name, pat))
+
+    active_ids = ", ".join(
+        str(a.get("rule_id") or "") for a in alerts if isinstance(a, dict) and a.get("rule_id")
+    ) or "ACTIVE_ALERT"
+    for label, pat in _HIGH_RISK_DRAFT_ACTION_PATTERNS:
+        items.append((active_ids, label, pat))
+    return items
+
+
+def _is_draft_subclause_negated(
+    subclause: str,
+    match_start: int,
+    match_end: int,
+    *,
+    allow_prohibition_line_header: bool = False,
+) -> bool:
+    """Determine if an action match inside a draft subclause is prohibited/negated rather than recommended."""
+    left = subclause[:match_start]
+    right = subclause[match_end:]
+
+    if _DRAFT_DOUBLE_NEG_PROHIBITION_RE.search(left):
+        return False
+
+    neg_matches = list(_DRAFT_PRE_PROHIBITION_RE.finditer(left))
+    aff_matches = list(_DRAFT_AFFIRMATIVE_RE.finditer(left))
+
+    if neg_matches:
+        last_neg_pos = neg_matches[-1].start()
+        last_aff_pos = aff_matches[-1].start() if aff_matches else -1
+        if last_neg_pos > last_aff_pos:
+            return True
+        return False
+
+    if aff_matches:
+        return False
+
+    if _DRAFT_POST_PROHIBITION_RE.search(right):
+        return True
+
+    if _DRAFT_RIGHT_AFFIRMATIVE_RE.search(right):
+        return False
+
+    if allow_prohibition_line_header:
+        return True
+
+    return False
+
+
+def verify_draft_against_alerts(
+    draft_text: str,
+    alerts: Optional[List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    """Deterministic post-generation draft verification against active safety alerts.
+
+    Blocks any non-negated recommendation of contraindicated actions (e.g., cervical rotational
+    manipulation when RF_001 is active) while allowing properly negated prohibitions (e.g., '严禁颈椎旋转扳法').
+    """
+    active_alerts = [a for a in (alerts or []) if isinstance(a, dict)]
+    if not active_alerts or not (draft_text or "").strip():
+        return {"passed": True, "blocked": False, "violations": [], "message": ""}
+
+    action_specs = _extract_alert_action_terms(active_alerts)
+    violations: List[Dict[str, str]] = []
+    seen_violation_keys = set()
+
+    for line in draft_text.splitlines():
+        if not line.strip():
+            continue
+        has_header = bool(_DRAFT_PROHIBITION_LINE_HEADER_RE.search(line))
+        # Split sentences first; line-level prohibition headers only govern the opening sentence before any adversative
+        sentences = re.split(r"[。！？]+", line)
+        for sent_idx, sent in enumerate(sentences):
+            if not sent.strip():
+                continue
+            # Split on adversative conjunctions: anything after 但/但是/然而/不过 loses line-header exemption
+            adv_parts = re.split(r"(?:但是|但|然而|不过)", sent)
+            for adv_idx, adv_part in enumerate(adv_parts):
+                if not adv_part.strip():
+                    continue
+                allow_header_here = has_header and sent_idx == 0 and adv_idx == 0
+                subclauses = re.split(r"[；;，,]+", adv_part)
+                for sub in subclauses:
+                    if not sub.strip():
+                        continue
+                    for rule_id, rule_label, pat in action_specs:
+                        for m in re.finditer(pat, sub, flags=re.IGNORECASE):
+                            if _is_draft_subclause_negated(
+                                sub,
+                                m.start(),
+                                m.end(),
+                                allow_prohibition_line_header=allow_header_here,
+                            ):
+                                continue
+                            matched_action = m.group(0)
+                            v_key = (sub.strip(), matched_action)
+                            if v_key in seen_violation_keys:
+                                continue
+                            seen_violation_keys.add(v_key)
+                            violations.append(
+                                {
+                                    "rule_id": rule_id,
+                                    "rule_name": rule_label,
+                                    "matched_action": matched_action,
+                                    "snippet": sub.strip()[:120],
+                                    "reason": f"草稿疑似非否定放行禁忌操作 '{matched_action}'（与激活告警 {rule_id} 冲突）",
+                                }
+                            )
+
+    if violations:
+        summary = "；".join(v["reason"] for v in violations[:3])
+        return {
+            "passed": False,
+            "blocked": True,
+            "violations": violations,
+            "message": f"安全拦截：生成草稿违背确定性安全禁忌，已阻止渲染。{summary}",
+        }
+    return {"passed": True, "blocked": False, "violations": [], "message": ""}
+
+
 def collect_unified_alerts(
     risk_report: Dict[str, Any],
     scale_results: List[Dict[str, Any]],
@@ -85,42 +276,74 @@ def collect_unified_alerts(
 
     rf_map = {r.rule_id: r for r in load_red_flags_catalog().rules}
     for res in scale_results:
-        if res.get("status") != "ok" or not res.get("red_flag_triggered"):
+        if res.get("status") != "ok":
             continue
+        is_red_flag = bool(res.get("red_flag_triggered"))
+        is_caution = bool(res.get("caution_triggered"))
+        if not is_red_flag and not is_caution:
+            continue
+
         linked_ids = list(res.get("linked_rule_ids") or [])
         linked_rule = rf_map.get(linked_ids[0]) if linked_ids else None
         rule_id_label = ", ".join(linked_ids) if linked_ids else f"SCALE_{res.get('scale_id', '')}"
-        unified.append(
-            {
-                "rule_id": rule_id_label,
-                "rule_type": "scale_linkage",
-                "name": f"量表阈值联动红旗：{res.get('scale_name', res.get('scale_id'))}",
-                "category": "量表与红旗联动预警",
-                "severity": "critical",
-                "source": "scale_linkage",
-                "source_label": f"确定性量表联动 ({res.get('scale_id')})",
-                "matched_evidence": [
-                    f"{res.get('scale_id')} 总分 = {res.get('total_score')} 分（{res.get('severity_band', '')}）"
-                ],
-                "clinical_action": linked_rule.recommended_action if linked_rule else "STOP_AND_REFER",
-                "clinical_alert": res.get("red_flag_reason") or (linked_rule.clinical_alert if linked_rule else ""),
-                "contraindicated_actions": list(linked_rule.contraindicated_actions) if linked_rule else [],
-                "reference": list(res.get("references") or [])
-                + (list(linked_rule.references) if linked_rule else []),
-            }
-        )
+        if is_red_flag:
+            unified.append(
+                {
+                    "rule_id": rule_id_label,
+                    "rule_type": "scale_linkage",
+                    "name": f"量表阈值联动红旗：{res.get('scale_name', res.get('scale_id'))}",
+                    "category": "量表与红旗联动预警",
+                    "severity": "critical",
+                    "source": "scale_linkage",
+                    "source_label": f"确定性量表联动 ({res.get('scale_id')})",
+                    "matched_evidence": [
+                        f"{res.get('scale_id')} 总分 = {res.get('total_score')} 分（{res.get('severity_band', '')}）"
+                    ],
+                    "clinical_action": linked_rule.recommended_action if linked_rule else "STOP_AND_REFER",
+                    "clinical_alert": res.get("red_flag_reason") or (linked_rule.clinical_alert if linked_rule else ""),
+                    "contraindicated_actions": list(linked_rule.contraindicated_actions) if linked_rule else [],
+                    "reference": list(res.get("references") or [])
+                    + (list(linked_rule.references) if linked_rule else []),
+                }
+            )
+        else:
+            unified.append(
+                {
+                    "rule_id": rule_id_label,
+                    "rule_type": "scale_caution_linkage",
+                    "name": f"量表轻度异常联动提示：{res.get('scale_name', res.get('scale_id'))}",
+                    "category": "量表与红旗联动提示",
+                    "severity": "medium",
+                    "source": "scale_linkage",
+                    "source_label": f"确定性量表轻度提示联动 ({res.get('scale_id')})",
+                    "matched_evidence": [
+                        f"{res.get('scale_id')} 总分 = {res.get('total_score')} 分（{res.get('severity_band', '')}）"
+                    ],
+                    "clinical_action": "CAUTION_AND_PROTECT",
+                    "clinical_alert": res.get("caution_reason") or (linked_rule.clinical_alert if linked_rule else ""),
+                    "contraindicated_actions": list(linked_rule.contraindicated_actions) if linked_rule else [],
+                    "reference": list(res.get("references") or [])
+                    + (list(linked_rule.references) if linked_rule else []),
+                }
+            )
     return unified
 
 
 def evaluate_scale_entries(
-    scale_params: List[Dict[str, Any]],
+    scale_params: Any,
     *,
     scales_path: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Deterministically evaluate extracted scale entries without defaulting missing fields to 0."""
+    if not isinstance(scale_params, list):
+        return []
     results: List[Dict[str, Any]] = []
-    for entry in scale_params or []:
+    for entry in scale_params:
+        if not isinstance(entry, dict):
+            continue
         scale_id = str(entry.get("scale_id", "")).strip()
+        if not scale_id:
+            continue
         params = entry.get("params") if isinstance(entry.get("params"), dict) else {}
         calc_res = calculate_scale(scale_id, params, scales_path=scales_path)
         calc_res["input_params"] = dict(params)
@@ -138,14 +361,28 @@ def generate_draft_document(
     mock_mode: Optional[bool] = None,
     client: Optional[LLMClient] = None,
 ) -> Dict[str, Any]:
-    """Generate ward-round outline or staged rehab education draft with hard constraints injected."""
+    """Generate ward-round outline or staged rehab education draft with hard constraints and output verification."""
     active_client = client or LLMClient()
     messages = build_draft_messages(mode, extracted_note, risk_report, scale_results)
     resp = active_client.chat_completion(messages, model=model, mock_mode=mock_mode)
+    if resp.get("status") == "error":
+        raise RuntimeError(sanitize_error_message(resp.get("message") or "文书草稿生成失败。"))
+
+    unified_alerts = collect_unified_alerts(risk_report, scale_results)
+    safety_check = verify_draft_against_alerts(resp.get("content", ""), unified_alerts)
+    is_blocked = bool(safety_check.get("blocked"))
+    safe_content = (
+        "⚠️ **安全拦截：模型生成的文书草稿涉嫌违背当前激活的安全红旗/禁忌约束，已被确定性输出复检拦截，禁止渲染。**\n\n"
+        f"- 拦截原因：{safety_check.get('message', '')}"
+        if is_blocked
+        else resp["content"]
+    )
     return {
         "mode": mode,
         "mode_label": DRAFT_MODE_LABELS.get(mode, mode),
-        "content": resp["content"],
+        "content": safe_content,
+        "blocked": is_blocked,
+        "safety_check": safety_check,
         "model": resp["model"],
         "mock": resp["mock"],
         "usage": resp.get("usage", {}),
@@ -392,19 +629,39 @@ def _render_top_safety_banner(state: Dict[str, Any]) -> None:
     suppressed = risk_report.get("suppressed_matches") or []
 
     if unified_alerts:
-        st.error(
-            f"🚨 **高危临床警示**：共触发 **{len(unified_alerts)}** 项红旗 / 用药冲突 / 量表联动告警，"
-            "请在任何诊疗或康复建议前先核查安全红线！"
-        )
+        has_high_or_critical = any(str(a.get("severity", "high")) in ("critical", "high") for a in unified_alerts)
+        if has_high_or_critical:
+            st.error(
+                f"🚨 **高危临床警示**：共触发 **{len(unified_alerts)}** 项红旗 / 用药冲突 / 量表联动告警，"
+                "请在任何诊疗或康复建议前先核查安全红线！"
+            )
+        else:
+            st.warning(
+                f"⚠️ **临床安全提示**：共触发 **{len(unified_alerts)}** 项提示级联动约束，"
+                "请留意禁忌操作并动态随访！"
+            )
         for alert in unified_alerts:
             severity = str(alert.get("severity", "high"))
             badge = SEVERITY_BADGE_MAP.get(severity, severity.upper())
             rule_id = alert.get("rule_id", "UNKNOWN")
             title = alert.get("name", "")
+            review_tags: List[str] = []
+            if alert.get("needs_review"):
+                review_tags.append("⚠️ 需人工复核 (needs_review)")
+            if alert.get("conflict_with_text"):
+                review_tags.append("⚠️ 结构化与原文冲突 (conflict_with_text)")
+            tag_suffix = f" | {' · '.join(review_tags)}" if review_tags else ""
             with st.container(border=True):
-                st.error(
-                    f"**[{rule_id}] {title}** | 严重度：`{badge}` | 来源：`{alert.get('source_label', alert.get('source', ''))}`"
+                header_msg = (
+                    f"**[{rule_id}] {title}** | 严重度：`{badge}` | 来源：`{alert.get('source_label', alert.get('source', ''))}`{tag_suffix}"
                 )
+                if severity in ("critical", "high"):
+                    st.error(header_msg)
+                else:
+                    st.warning(header_msg)
+                if review_tags:
+                    conflict_detail = alert.get("conflict_detail") or alert.get("review_reason") or "模型结构化事实与病历原文证据存在潜在冲突或边界否定抑制，请临床医师人工核实原文！"
+                    st.warning(f"🔎 **人工复核提示**：{conflict_detail}")
                 evidence = "；".join(str(x) for x in alert.get("matched_evidence") or [])
                 st.markdown(f"- **命中证据 (`matched_evidence`)**：{evidence or '见结构化事实'}")
                 st.markdown(f"- **建议动作 (`clinical_action`)**：`{alert.get('clinical_action', '')}`")
@@ -705,7 +962,7 @@ def _render_tab_scales(
                     st.session_state["copilot_state"] = state
                 st.rerun()
             except Exception as exc:
-                st.error(f"刷新文书草稿失败：{exc}")
+                st.error(f"刷新文书草稿失败：{sanitize_error_message(exc)}")
 
     if not scale_results:
         st.info("病历文本中未检测到明确量表条目分值，可在下方“手动新增量表评估”选择量表计算。")
@@ -890,7 +1147,7 @@ def _render_tab_draft(
                 st.session_state["copilot_state"] = state
                 current_draft = new_draft
         except Exception as exc:
-            st.error(f"文书草稿生成失败：{exc}")
+            st.error(f"文书草稿生成失败：{sanitize_error_message(exc)}")
 
     if state.get("draft_stale"):
         st.warning("⚠️ 量表结果已更新，当前草稿仍基于更新前的数据，请点击上方按钮刷新。")
@@ -900,6 +1157,19 @@ def _render_tab_draft(
         f"当前模式：**{DRAFT_MODE_LABELS.get(state.get('draft_mode', 'ward_round'))}** | "
         f"模型：`{current_draft.get('model', '')}` | Mock：`{current_draft.get('mock', False)}`"
     )
+    if current_draft.get("blocked"):
+        safety_check = current_draft.get("safety_check") or {}
+        violations = safety_check.get("violations") or []
+        detail_lines = [
+            f"- **[{v.get('rule_id', '')}]** 命中违规动作 `{v.get('matched_action', '')}`：{v.get('snippet', '')}"
+            for v in violations
+        ]
+        st.error(
+            "🛑 **安全拦截：生成的文书草稿违背确定性安全红旗/禁忌约束，已阻止渲染！**\n\n"
+            + ("\n".join(detail_lines) if detail_lines else safety_check.get("message", ""))
+        )
+        return
+
     with st.container(border=True):
         st.markdown(draft_content)
 
@@ -1001,7 +1271,7 @@ def main() -> None:
                 st.session_state["copilot_state"] = result_state
                 st.session_state["analysis_run_id"] = st.session_state.get("analysis_run_id", 0) + 1
             except Exception as exc:
-                st.error(f"分析执行失败：{exc}")
+                st.error(f"分析执行失败：{sanitize_error_message(exc)}")
 
     state = st.session_state.get("copilot_state")
     if not state:

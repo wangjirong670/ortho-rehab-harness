@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -44,7 +45,9 @@ STATUS_OPTIONS: List[str] = [
     "仅翻车",
     "FAIL_SAFETY",
     "FAIL_OVER_REFUSAL",
+    "FAIL_RULE_ENGINE",
     "FAIL_ACCURACY",
+    "FAIL_INFRA",
     "PASS",
 ]
 
@@ -52,15 +55,41 @@ STATUS_BADGES: Dict[str, str] = {
     "PASS": "🟢 PASS",
     "FAIL_SAFETY": "🔴 FAIL_SAFETY",
     "FAIL_OVER_REFUSAL": "🟠 FAIL_OVER_REFUSAL",
+    "FAIL_RULE_ENGINE": "🟣 FAIL_RULE_ENGINE",
     "FAIL_ACCURACY": "🟡 FAIL_ACCURACY",
+    "FAIL_INFRA": "⚫ FAIL_INFRA",
 }
 
 STATUS_FULL_LABELS: Dict[str, str] = {
     "PASS": "🟢 PASS（通过）",
     "FAIL_SAFETY": "🔴 FAIL_SAFETY（安全红线否决）",
     "FAIL_OVER_REFUSAL": "🟠 FAIL_OVER_REFUSAL（过度拒答）",
+    "FAIL_RULE_ENGINE": "🟣 FAIL_RULE_ENGINE（规则引擎漏报/误报）",
     "FAIL_ACCURACY": "🟡 FAIL_ACCURACY（准确性/数值失误）",
+    "FAIL_INFRA": "⚫ FAIL_INFRA（调用/基础设施异常）",
 }
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    """Safely convert an arbitrary JSON field into a finite float."""
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return default
+    return num if math.isfinite(num) else default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    """Safely convert an arbitrary JSON field into an int."""
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return default
+    return int(num) if math.isfinite(num) else default
 
 FALLBACK_PALETTE: List[str] = [
     "#2563EB",
@@ -117,7 +146,7 @@ def format_report_option(report_path: Path) -> str:
         return f"{report_path.name} (无法解析)"
     created = str(data.get("created_at") or "-")
     mode_tag = "Mock" if data.get("mock_mode") else "Live"
-    case_count = data.get("case_count", 0)
+    case_count = _safe_int(data.get("case_count"), 0)
     priv_tag = "含私有集" if data.get("include_private") else "仅公开集"
     return f"{report_path.name} | {created} | {mode_tag} | {case_count} 题 | {priv_tag}"
 
@@ -127,7 +156,9 @@ def pair_bare_and_harness(
 ) -> List[Tuple[str, Dict[str, Any], Dict[str, Any]]]:
     """Pair bare_llm and harness_copilot runs (preferring same model) for delta cards."""
     by_model: Dict[str, Dict[str, Dict[str, Any]]] = {}
-    for run in runs:
+    for run in runs or []:
+        if not isinstance(run, dict):
+            continue
         model = str(run.get("model") or "unknown")
         mode = str(run.get("mode") or "")
         by_model.setdefault(model, {})
@@ -142,8 +173,8 @@ def pair_bare_and_harness(
     if pairs:
         return pairs
 
-    bare_runs = [r for r in runs if r.get("mode") == "bare_llm"]
-    harness_runs = [r for r in runs if r.get("mode") == "harness_copilot"]
+    bare_runs = [r for r in (runs or []) if isinstance(r, dict) and r.get("mode") == "bare_llm"]
+    harness_runs = [r for r in (runs or []) if isinstance(r, dict) and r.get("mode") == "harness_copilot"]
     if bare_runs and harness_runs:
         b = bare_runs[0]
         h = harness_runs[0]
@@ -153,31 +184,34 @@ def pair_bare_and_harness(
 
 
 def _extract_dim_entry(run: Dict[str, Any], dim_key: str) -> Dict[str, Any]:
-    summary = run.get("summary") or {}
-    dims = summary.get("dimensions") or {}
-    entry = dims.get(dim_key) or {}
+    if not isinstance(run, dict):
+        return {"total": 0, "passed": 0, "pass_rate": 0.0}
+    summary = run.get("summary") if isinstance(run.get("summary"), dict) else {}
+    dims = summary.get("dimensions") if isinstance(summary.get("dimensions"), dict) else {}
+    entry = dims.get(dim_key) if isinstance(dims.get(dim_key), dict) else {}
     return {
-        "total": int(entry.get("total", 0) or 0),
-        "passed": int(entry.get("passed", 0) or 0),
-        "pass_rate": float(entry.get("pass_rate", 0.0) or 0.0),
+        "total": _safe_int(entry.get("total"), 0),
+        "passed": _safe_int(entry.get("passed"), 0),
+        "pass_rate": _safe_float(entry.get("pass_rate"), 0.0),
     }
 
 
 def build_dimension_comparison_rows(runs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Build 4-dimension comparison rows with Chinese names and pass rates."""
-    pairs = pair_bare_and_harness(runs)
+    valid_runs = [r for r in (runs or []) if isinstance(r, dict)]
+    pairs = pair_bare_and_harness(valid_runs)
     primary_pair = pairs[0] if len(pairs) == 1 else None
 
     rows: List[Dict[str, Any]] = []
     for dim_key in DIMENSION_ORDER:
-        dim_totals = [_extract_dim_entry(r, dim_key)["total"] for r in runs]
+        dim_totals = [_extract_dim_entry(r, dim_key)["total"] for r in valid_runs]
         case_total = max(dim_totals) if dim_totals else 0
         row: Dict[str, Any] = {
             "评测维度": DIMENSION_LABELS[dim_key],
             "维度标识": dim_key,
             "病例数": case_total,
         }
-        for idx, run in enumerate(runs):
+        for idx, run in enumerate(valid_runs):
             run_label = str(run.get("run_label") or f"run_{idx + 1}")
             entry = _extract_dim_entry(run, dim_key)
             row[run_label] = f"{entry['pass_rate']:.1f}% ({entry['passed']}/{entry['total']})"
@@ -209,7 +243,9 @@ def build_radar_figure(runs: List[Dict[str, Any]]) -> go.Figure:
     theta_labels = [DIMENSION_LABELS[d] for d in DIMENSION_ORDER]
     closed_theta = theta_labels + [theta_labels[0]]
 
-    for idx, run in enumerate(runs):
+    for idx, run in enumerate(runs or []):
+        if not isinstance(run, dict):
+            continue
         run_label = str(run.get("run_label") or f"run_{idx + 1}")
         rates = [_extract_dim_entry(run, d)["pass_rate"] for d in DIMENSION_ORDER]
         closed_rates = rates + [rates[0]]
@@ -250,7 +286,9 @@ def build_bar_figure(runs: List[Dict[str, Any]]) -> go.Figure:
     fig = go.Figure()
     x_labels = [DIMENSION_LABELS[d] for d in DIMENSION_ORDER]
 
-    for idx, run in enumerate(runs):
+    for idx, run in enumerate(runs or []):
+        if not isinstance(run, dict):
+            continue
         run_label = str(run.get("run_label") or f"run_{idx + 1}")
         rates = [_extract_dim_entry(run, d)["pass_rate"] for d in DIMENSION_ORDER]
         line_color, _, _ = _run_visual_style(run, idx)
@@ -372,14 +410,21 @@ def filter_case_results(
 ) -> List[Dict[str, Any]]:
     """Flatten and filter case results across benchmark runs, failures first."""
     records: List[Dict[str, Any]] = []
-    for idx, run in enumerate(runs):
+    for idx, run in enumerate(runs or []):
+        if not isinstance(run, dict):
+            continue
         run_label = str(run.get("run_label") or f"run_{idx + 1}")
         if selected_run != "全部" and run_label != selected_run:
             continue
 
         model = str(run.get("model") or "")
         mode = str(run.get("mode") or "")
-        for res in run.get("results") or []:
+        raw_results = run.get("results")
+        if not isinstance(raw_results, list):
+            continue
+        for res in raw_results:
+            if not isinstance(res, dict):
+                continue
             status = str(res.get("status") or ("PASS" if res.get("passed") else "FAIL_SAFETY"))
             passed = bool(res.get("passed", status == "PASS"))
             category = str(res.get("category") or "")
@@ -520,7 +565,7 @@ def _render_report_meta_banner(report: Dict[str, Any]) -> None:
     c1.metric("报告 ID", str(report.get("report_id") or "-"))
     c2.metric("生成时间", str(report.get("created_at") or "-"))
     c3.metric("评测模式", mock_badge)
-    c4.metric("病例数", f"{report.get('case_count', 0)} 题")
+    c4.metric("病例数", f"{_safe_int(report.get('case_count'), 0)} 题")
     c5.metric("数据隔离", "已隔离" if not include_private else "含私有集")
     st.caption(f"隔离状态：{privacy_badge}")
 
@@ -528,18 +573,19 @@ def _render_report_meta_banner(report: Dict[str, Any]) -> None:
 def _render_kpi_comparison(runs: List[Dict[str, Any]]) -> None:
     st.subheader("📊 核心安全与防拒答对比面板")
 
-    pairs = pair_bare_and_harness(runs)
+    valid_runs = [r for r in (runs or []) if isinstance(r, dict)]
+    pairs = pair_bare_and_harness(valid_runs)
     if pairs:
         for label, bare_run, harness_run in pairs:
-            b_sum = bare_run.get("summary") or {}
-            h_sum = harness_run.get("summary") or {}
+            b_sum = bare_run.get("summary") if isinstance(bare_run.get("summary"), dict) else {}
+            h_sum = harness_run.get("summary") if isinstance(harness_run.get("summary"), dict) else {}
 
-            b_pass = float(b_sum.get("overall_pass_rate", 0.0) or 0.0)
-            h_pass = float(h_sum.get("overall_pass_rate", 0.0) or 0.0)
-            b_veto = float(b_sum.get("safety_veto_rate", 0.0) or 0.0)
-            h_veto = float(h_sum.get("safety_veto_rate", 0.0) or 0.0)
-            b_over = float(b_sum.get("over_refusal_rate", 0.0) or 0.0)
-            h_over = float(h_sum.get("over_refusal_rate", 0.0) or 0.0)
+            b_pass = _safe_float(b_sum.get("overall_pass_rate"), 0.0)
+            h_pass = _safe_float(h_sum.get("overall_pass_rate"), 0.0)
+            b_veto = _safe_float(b_sum.get("safety_veto_rate"), 0.0)
+            h_veto = _safe_float(h_sum.get("safety_veto_rate"), 0.0)
+            b_over = _safe_float(b_sum.get("over_refusal_rate"), 0.0)
+            h_over = _safe_float(h_sum.get("over_refusal_rate"), 0.0)
 
             with st.container(border=True):
                 st.markdown(f"##### 🛡️ Harness 护栏增益对比：`{label}` (`harness_copilot` vs `bare_llm`)")
@@ -563,18 +609,21 @@ def _render_kpi_comparison(runs: List[Dict[str, Any]]) -> None:
                     delta_color="inverse",
                 )
 
-    cols = st.columns(max(1, min(len(runs), 4)))
-    for idx, run in enumerate(runs):
+    cols = st.columns(max(1, min(len(valid_runs), 4)))
+    for idx, run in enumerate(valid_runs):
         col = cols[idx % len(cols)]
-        summary = run.get("summary") or {}
+        summary = run.get("summary") if isinstance(run.get("summary"), dict) else {}
         mode = str(run.get("mode") or "")
         mode_text = MODE_LABELS.get(mode, mode)
-        pass_rate = float(summary.get("overall_pass_rate", 0.0) or 0.0)
-        veto_rate = float(summary.get("safety_veto_rate", 0.0) or 0.0)
-        over_rate = float(summary.get("over_refusal_rate", 0.0) or 0.0)
-        passed_cases = int(summary.get("passed_cases", 0) or 0)
-        total_cases = int(summary.get("total_cases", 0) or 0)
-        latency = float(run.get("total_latency_ms", 0.0) or 0.0)
+        pass_rate = _safe_float(summary.get("overall_pass_rate"), 0.0)
+        veto_rate = _safe_float(summary.get("safety_veto_rate"), 0.0)
+        over_rate = _safe_float(summary.get("over_refusal_rate"), 0.0)
+        passed_cases = _safe_int(summary.get("passed_cases"), 0)
+        total_cases = _safe_int(summary.get("total_cases"), 0)
+        veto_count = _safe_int(summary.get("safety_veto_count"), 0)
+        over_count = _safe_int(summary.get("over_refusal_count"), 0)
+        over_app = _safe_int(summary.get("over_refusal_applicable"), 0)
+        latency = _safe_float(run.get("total_latency_ms"), 0.0)
 
         with col:
             with st.container(border=True):
@@ -583,11 +632,11 @@ def _render_kpi_comparison(runs: List[Dict[str, Any]]) -> None:
                 st.caption(f"模式：{mode_text} · 耗时：{latency:.1f} ms")
                 m1, m2, m3 = st.columns(3)
                 m1.metric("总通过率", f"{pass_rate:.1f}%", f"{passed_cases}/{total_cases} 题")
-                m2.metric("安全否决率", f"{veto_rate:.1f}%", f"{summary.get('safety_veto_count', 0)} 题")
+                m2.metric("安全否决率", f"{veto_rate:.1f}%", f"{veto_count} 题")
                 m3.metric(
                     "过度拒答率",
                     f"{over_rate:.1f}%",
-                    f"{summary.get('over_refusal_count', 0)}/{summary.get('over_refusal_applicable', 0)}",
+                    f"{over_count}/{over_app}",
                 )
 
 
@@ -633,12 +682,21 @@ def _render_case_replay_card(record: Dict[str, Any], *, expanded: bool) -> None:
         meta_cols[3].markdown(f"**期望动作**：`{expected_action}`")
         meta_cols[4].markdown(f"**可见性**：`{visibility}`")
 
-        failure_reasons = res.get("failure_reasons") or []
-        if failure_reasons:
+        failure_reasons = res.get("failure_reasons")
+        if isinstance(failure_reasons, list) and failure_reasons:
             reasons_md = "\n".join(f"- {r}" for r in failure_reasons)
             st.error(f"**翻车原因汇总**\n{reasons_md}")
 
-        forbidden_violations = res.get("forbidden_violations") or []
+        rule_check = res.get("rule_engine_check")
+        if isinstance(rule_check, dict) and rule_check.get("checked") and not rule_check.get("matched", True):
+            st.warning(
+                f"规则引擎比对：预期 `{rule_check.get('expected_rule_ids')}` · "
+                f"实测 `{rule_check.get('triggered_rule_ids')}`"
+            )
+
+        forbidden_violations = [
+            v for v in (res.get("forbidden_violations") or []) if isinstance(v, dict)
+        ]
         if forbidden_violations:
             st.markdown("##### 🚨 命中的安全/校准禁用正则 (`forbidden_violations`)")
             for idx, v in enumerate(forbidden_violations, start=1):
@@ -654,7 +712,9 @@ def _render_case_replay_card(record: Dict[str, Any], *, expanded: bool) -> None:
                     f"- **上下文摘录**：`{snippet}`"
                 )
 
-        suppressed_hits = res.get("suppressed_forbidden_hits") or []
+        suppressed_hits = [
+            s for s in (res.get("suppressed_forbidden_hits") or []) if isinstance(s, dict)
+        ]
         if suppressed_hits:
             st.markdown("##### 🛡️ 否定词保护放行审计 (`suppressed_forbidden_hits`)")
             for idx, s in enumerate(suppressed_hits, start=1):
@@ -667,8 +727,8 @@ def _render_case_replay_card(record: Dict[str, Any], *, expanded: bool) -> None:
                     f"（否定/劝阻锚点：`{neg_token}` · 原因：`{reason}`）"
                 )
 
-        matched_kw = res.get("must_mention_matched") or []
-        missing_kw = res.get("must_mention_missing") or []
+        matched_kw = res.get("must_mention_matched") if isinstance(res.get("must_mention_matched"), list) else []
+        missing_kw = res.get("must_mention_missing") if isinstance(res.get("must_mention_missing"), list) else []
         kw_col1, kw_col2 = st.columns(2)
         with kw_col1:
             if matched_kw:
@@ -681,13 +741,13 @@ def _render_case_replay_card(record: Dict[str, Any], *, expanded: bool) -> None:
             else:
                 st.caption("未提及关键词：无")
 
-        numeric_checks = res.get("numeric_target_checks") or {}
-        if numeric_checks:
+        numeric_checks = res.get("numeric_target_checks")
+        if isinstance(numeric_checks, dict) and numeric_checks:
             st.markdown("##### 🔢 确定性数值核验 (`numeric_target_checks`)")
             st.json(numeric_checks)
 
         st.markdown("##### 💬 多轮红队对话回放")
-        turns = res.get("turns") or []
+        turns = [t for t in (res.get("turns") or []) if isinstance(t, dict)]
         if not turns:
             st.caption("无对话轮次记录。")
             return
@@ -696,7 +756,7 @@ def _render_case_replay_card(record: Dict[str, Any], *, expanded: bool) -> None:
             turn_no = turn_item.get("turn")
             user_msg = str(turn_item.get("user_msg") or "")
             assistant_msg = str(turn_item.get("assistant_msg") or "")
-            latency_ms = float(turn_item.get("latency_ms", 0.0) or 0.0)
+            latency_ms = _safe_float(turn_item.get("latency_ms"), 0.0)
 
             with st.chat_message("user"):
                 st.caption(f"Turn {turn_no} · 红队患者/临床提问")
@@ -722,9 +782,15 @@ def _render_case_replay_card(record: Dict[str, Any], *, expanded: bool) -> None:
 def _render_failure_replay(runs: List[Dict[str, Any]]) -> None:
     st.subheader("🎬 “翻车实录”多轮对话回放器")
 
-    run_labels = [str(r.get("run_label") or f"run_{i + 1}") for i, r in enumerate(runs)]
+    valid_runs = [r for r in (runs or []) if isinstance(r, dict)]
+    run_labels = [str(r.get("run_label") or f"run_{i + 1}") for i, r in enumerate(valid_runs)]
     all_categories = sorted(
-        {str(res.get("category") or "") for r in runs for res in (r.get("results") or []) if res.get("category")}
+        {
+            str(res.get("category") or "")
+            for r in valid_runs
+            for res in (r.get("results") or [])
+            if isinstance(res, dict) and res.get("category")
+        }
     )
 
     f1, f2, f3, f4 = st.columns(4)

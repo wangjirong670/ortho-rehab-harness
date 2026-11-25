@@ -21,8 +21,9 @@ from core_tools.schemas import ScaleItem, ScaleSpec, ScalesCatalog
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SCALES_PATH = PROJECT_ROOT / "knowledge_base" / "scales_spec.yaml"
 
-# Cervical JOA 17-point threshold triggering spinal cord compression red-flag alert
-JOA_CERVICAL_RED_FLAG_THRESHOLD = 12.5
+# Cervical JOA 17-point integer thresholds: <=12 triggers critical red-flag; 13-16 triggers caution linkage
+JOA_CERVICAL_RED_FLAG_THRESHOLD = 12
+JOA_CERVICAL_MILD_THRESHOLD = 16
 
 
 def _is_valid_number(value: Any) -> bool:
@@ -120,8 +121,9 @@ def calculate_joa_improvement_rate(
     post_score: Any,
     max_score: float = 17.0,
     min_score: float = 0.0,
+    step: Optional[float] = 1.0,
 ) -> Dict[str, Any]:
-    """Compute Hirabayashi JOA improvement rate with strict zero-division protection.
+    """Compute Hirabayashi JOA improvement rate with strict type, range, step, and zero-division protection.
 
     Formula: (post_score - pre_score) / (max_score - pre_score) * 100
     """
@@ -150,6 +152,24 @@ def calculate_joa_improvement_rate(
             "message": f"术后评分 {post:g} 超出合法范围 [{min_score:g}, {max_score:g}]。",
             "improvement_rate_pct": None,
         }
+
+    if step is not None and step > 0:
+        pre_offset = (pre - min_score) / step
+        if abs(pre_offset - round(pre_offset)) > 1e-6:
+            return {
+                "status": "error",
+                "error_code": "INVALID_STEP",
+                "message": f"术前评分 (pre_score) {pre:g} 不符合步长要求（步长应为 {step:g}）。",
+                "improvement_rate_pct": None,
+            }
+        post_offset = (post - min_score) / step
+        if abs(post_offset - round(post_offset)) > 1e-6:
+            return {
+                "status": "error",
+                "error_code": "INVALID_STEP",
+                "message": f"术后评分 (post_score) {post:g} 不符合步长要求（步长应为 {step:g}）。",
+                "improvement_rate_pct": None,
+            }
 
     denominator = max_score - pre
     if abs(denominator) <= 1e-9:
@@ -260,6 +280,19 @@ def calculate_scale(
         else:
             validated_values[item.item_id] = float(params[item.item_id])
 
+    if spec.improvement_rate_formula and "pre_score" in params and params["pre_score"] is not None:
+        pre_spec = ScaleItem(
+            item_id="pre_score",
+            label="术前基线总分",
+            min_value=spec.min_total,
+            max_value=spec.max_total,
+            step=1.0,
+            required=False,
+        )
+        pre_err = _validate_item_value(pre_spec, params["pre_score"])
+        if pre_err:
+            invalid_fields.append({"field": "pre_score", "reason": pre_err})
+
     if missing_fields or invalid_fields:
         msg_parts: List[str] = []
         if missing_fields:
@@ -320,6 +353,8 @@ def calculate_scale(
         "item_scores": validated_values,
         "red_flag_triggered": False,
         "red_flag_reason": None,
+        "caution_triggered": False,
+        "caution_reason": None,
         "linked_rule_ids": [],
         "references": list(spec.references),
     }
@@ -334,13 +369,23 @@ def calculate_scale(
         span = spec.max_total - spec.min_total
         result["normalized_score_pct"] = round((total_score - spec.min_total) / span * 100.0, 2)
 
-    if spec.scale_id == "JOA_CERVICAL_17" and total_score <= JOA_CERVICAL_RED_FLAG_THRESHOLD + 1e-9:
-        result["red_flag_triggered"] = True
-        result["red_flag_reason"] = (
-            f"颈椎 JOA 17 分制总分为 {total_score_out} 分（≤ {JOA_CERVICAL_RED_FLAG_THRESHOLD} 分阈值），"
-            "提示中重度颈脊髓功能障碍，严禁颈椎旋转扳法/暴力正骨，建议尽快完善颈椎 MRI 并转诊脊柱骨科评估。"
-        )
-        result["linked_rule_ids"] = ["RF_001"]
+    if spec.scale_id == "JOA_CERVICAL_17":
+        if total_score <= JOA_CERVICAL_RED_FLAG_THRESHOLD + 1e-9:
+            result["red_flag_triggered"] = True
+            result["red_flag_reason"] = (
+                f"颈椎 JOA 17 分制总分为 {total_score_out} 分（≤ {JOA_CERVICAL_RED_FLAG_THRESHOLD} 分阈值），"
+                "提示中重度颈脊髓功能障碍，严禁颈椎旋转扳法/暴力正骨，建议尽快完善颈椎 MRI 并转诊脊柱骨科评估。"
+            )
+            result["caution_triggered"] = True
+            result["caution_reason"] = result["red_flag_reason"]
+            result["linked_rule_ids"] = ["RF_001"]
+        elif total_score <= JOA_CERVICAL_MILD_THRESHOLD + 1e-9:
+            result["caution_triggered"] = True
+            result["caution_reason"] = (
+                f"颈椎 JOA 17 分制总分为 {total_score_out} 分（13–16 分，轻度脊髓功能障碍），"
+                "虽未达 12 分重危阈值，但仍存在轻度颈脊髓功能受累风险，仍严禁颈椎旋转扳法/暴力整复，建议结合影像学动态随访。"
+            )
+            result["linked_rule_ids"] = ["RF_001"]
 
     if spec.scale_id == "JOA_LUMBAR_29" and validated_values.get("bladder_score", 0) <= -6:
         result["red_flag_triggered"] = True
@@ -348,6 +393,8 @@ def calculate_scale(
             "腰椎 JOA 膀胱功能项为 -6 分（尿潴留/失禁），高度警惕马尾综合征（骨科急诊红旗），"
             "严禁推拿保守观察，须立即急诊脊柱外科评估。"
         )
+        result["caution_triggered"] = True
+        result["caution_reason"] = result["red_flag_reason"]
         result["linked_rule_ids"] = ["RF_002"]
 
     if spec.improvement_rate_formula and "pre_score" in params and params["pre_score"] is not None:
@@ -356,6 +403,7 @@ def calculate_scale(
             post_score=total_score,
             max_score=spec.max_total,
             min_score=spec.min_total,
+            step=1.0,
         )
 
     return result

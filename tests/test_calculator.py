@@ -68,7 +68,11 @@ def test_list_available_scales_covers_four_scales() -> None:
     [
         (0, "无痛"),
         (2.5, "轻度疼痛"),
+        (3.5, "轻度疼痛"),
+        (4.0, "中度疼痛"),
         (5.0, "中度疼痛"),
+        (6.0, "中度疼痛"),
+        (7.0, "重度疼痛"),
         (8.5, "重度疼痛"),
     ],
 )
@@ -88,13 +92,14 @@ def test_womac_likert_calculation_and_normalized_pct() -> None:
     assert res["total_score"] == 48
     assert res["normalized_score_pct"] == 50.0
     assert res["severity_band"] == "中度功能受限/症状"
+    assert "项目自定义" in res["version_note"]
     assert res["subscale_scores"]["pain"]["score"] == 10
     assert res["subscale_scores"]["stiffness"]["score"] == 4
     assert res["subscale_scores"]["physical_function"]["score"] == 34
 
 
-def test_joa_cervical_17_triggers_red_flag_at_or_below_12_5() -> None:
-    # Total = 2+2+1+1+1+2 = 9 (<= 12.5)
+def test_joa_cervical_17_integer_thresholds_and_mild_caution() -> None:
+    # Total = 2+2+1+1+1+2 = 9 (<= 12)
     res_low = calculate_scale(
         "JOA_CERVICAL_17",
         {
@@ -111,9 +116,10 @@ def test_joa_cervical_17_triggers_red_flag_at_or_below_12_5() -> None:
     assert res_low["total_score"] == 9
     assert res_low["severity_band"] == "中度脊髓功能障碍"
     assert res_low["red_flag_triggered"] is True
+    assert res_low["caution_triggered"] is True
     assert "RF_001" in res_low["linked_rule_ids"]
 
-    # Boundary: total = 12 (<= 12.5) triggers red flag; total = 13 (> 12.5) does not
+    # Boundary: total = 12 (<= 12) triggers critical red flag; total = 13..16 triggers advisory caution
     res_12 = calculate_scale(
         "JOA_CERVICAL_17",
         {
@@ -141,6 +147,49 @@ def test_joa_cervical_17_triggers_red_flag_at_or_below_12_5() -> None:
     )
     assert res_13["total_score"] == 13
     assert res_13["red_flag_triggered"] is False
+    assert res_13["caution_triggered"] is True
+    assert "严禁颈椎旋转扳法" in res_13["caution_reason"]
+    assert "RF_001" in res_13["linked_rule_ids"]
+
+    # Score = 17 (normal) triggers neither red_flag nor caution
+    res_17 = calculate_scale(
+        "JOA_CERVICAL_17",
+        {
+            "upper_limb_motor": 4,
+            "lower_limb_motor": 4,
+            "upper_limb_sensory": 2,
+            "lower_limb_sensory": 2,
+            "trunk_sensory": 2,
+            "bladder_function": 3,
+        },
+    )
+    assert res_17["total_score"] == 17
+    assert res_17["red_flag_triggered"] is False
+    assert res_17["caution_triggered"] is False
+    assert res_17["linked_rule_ids"] == []
+
+
+def test_joa_pre_score_step_validation_rejects_fractional_scores() -> None:
+    bad_rate = calculate_joa_improvement_rate(pre_score=16.5, post_score=13, max_score=17)
+    assert bad_rate["status"] == "error"
+    assert bad_rate["error_code"] == "INVALID_STEP"
+    assert bad_rate["improvement_rate_pct"] is None
+
+    bad_integrated = calculate_scale(
+        "JOA_CERVICAL_17",
+        {
+            "upper_limb_motor": 3,
+            "lower_limb_motor": 3,
+            "upper_limb_sensory": 2,
+            "lower_limb_sensory": 1,
+            "trunk_sensory": 2,
+            "bladder_function": 2,
+            "pre_score": 16.5,
+        },
+    )
+    assert bad_integrated["status"] == "error"
+    assert bad_integrated["error_code"] == "VALIDATION_ERROR"
+    assert any(f["field"] == "pre_score" for f in bad_integrated["invalid_fields"])
 
 
 def test_joa_cervical_improvement_rate_and_zero_division_protection() -> None:

@@ -469,3 +469,68 @@ def test_apptest_live_runner_quick_mock_benchmark(
     assert len(at.get("plotly_chart")) == 2
     assert len(at.expander) >= 10
     assert len(at.chat_message) >= 2
+
+
+def test_dashboard_handles_malformed_report_fields_and_new_statuses(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    malformed = build_sample_report(report_id="malformed_20261126")
+    malformed["case_count"] = "invalid_num"
+    malformed["runs"][0]["total_latency_ms"] = "NaN"
+    malformed["runs"][0]["summary"]["overall_pass_rate"] = "not-a-float"
+    malformed["runs"][0]["summary"]["passed_cases"] = None
+    malformed["runs"][0]["summary"]["dimensions"]["red_flag_interception"] = {
+        "total": "abc",
+        "passed": None,
+        "pass_rate": "bad",
+    }
+    malformed["runs"][0]["results"].append(
+        {
+            "case_id": "ORTHO_LONG_013",
+            "category": "规则引擎测试",
+            "dimension": "longitudinal_memory",
+            "risk_level": "critical",
+            "status": "FAIL_RULE_ENGINE",
+            "passed": False,
+            "rule_engine_check": {
+                "checked": True,
+                "expected_rule_ids": ["DC_011"],
+                "triggered_rule_ids": [],
+                "matched": False,
+            },
+            "failure_reasons": ["规则引擎漏报预期规则: DC_011"],
+            "turns": [{"turn": 1, "user_msg": "u", "assistant_msg": "a", "latency_ms": "bad"}],
+        }
+    )
+    malformed["runs"][0]["results"].append(
+        {
+            "case_id": "ORTHO_LONG_015",
+            "category": "异常测试",
+            "dimension": "longitudinal_memory",
+            "risk_level": "critical",
+            "status": "FAIL_INFRA",
+            "passed": False,
+            "failure_reasons": ["基础设施/模型调用异常（FAIL_INFRA）：TimeoutError"],
+            "turns": None,
+        }
+    )
+
+    rows = build_dimension_comparison_rows(malformed["runs"])
+    assert len(rows) == 4
+    radar = build_radar_figure(malformed["runs"])
+    assert len(radar.data) == 2
+    bar = build_bar_figure(malformed["runs"])
+    assert len(bar.data) == 2
+
+    rule_fail = filter_case_results(malformed["runs"], selected_status="FAIL_RULE_ENGINE")
+    assert len(rule_fail) == 1
+    infra_fail = filter_case_results(malformed["runs"], selected_status="FAIL_INFRA")
+    assert len(infra_fail) == 1
+
+    report_path = tmp_path / "bench_malformed.json"
+    report_path.write_text(json.dumps(malformed, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("ORTHO_BENCH_RESULTS_DIR", str(tmp_path))
+
+    at = AppTest.from_file(BENCH_APP_PATH, default_timeout=20)
+    at.run()
+    assert not at.exception

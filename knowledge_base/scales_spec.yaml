@@ -23,20 +23,20 @@ scales:
         min_score: 0
         max_score: 0
       - label: "轻度疼痛"
-        min_score: 0.1
-        max_score: 3.0
+        min_score: 0.5
+        max_score: 3.5
       - label: "中度疼痛"
-        min_score: 3.1
-        max_score: 6.0
+        min_score: 4.0
+        max_score: 6.5
       - label: "重度疼痛"
-        min_score: 6.1
+        min_score: 7.0
         max_score: 10.0
     references:
-      - "疼痛评估与管理临床实践指南（VAS 0-10 分标准）"
+      - "中华医学会疼痛学分会《疼痛评估与管理临床实践指南》（2019版）- 视觉模拟评分（VAS 0-10 分：<4 轻度、4-6 中度、≥7 重度）"
 
   - scale_id: "WOMAC_LIKERT_V3_1"
     name: "西安大略和麦克马斯特大学骨关节炎指数（WOMAC Likert 3.1 版）"
-    version_note: "Likert 5 级评分制（每项 0=无, 1=轻度, 2=中度, 3=重度, 4=极重度），共 24 项，原始总分 0-96 分，支持同步计算 0-100 标准化百分制分（total/96*100）。"
+    version_note: "Likert 5 级评分制（每项 0=无, 1=轻度, 2=中度, 3=重度, 4=极重度），共 24 项，原始总分 0-96 分，支持同步计算 0-100 标准化百分制分（total/96*100）。注：severity_bands 所采用的三分法（0-32/33-64/65-96）为本项目自定义参考分段，非原版 WOMAC 官方验证临床切点。"
     review_status: "draft_for_clinician_review"
     direction: "higher_is_worse"
     min_total: 0
@@ -190,7 +190,7 @@ scales:
         min_score: 65
         max_score: 96
     references:
-      - "Bellamy N. WOMAC Osteoarthritis Index User Guide (Likert 3.1, 0-96 分制)"
+      - "Bellamy N. WOMAC Osteoarthritis Index User Guide XI (2016), Likert 3.1 (0-96 分制，项目自定义三分法分段仅供结构化展示)"
 
   - scale_id: "JOA_CERVICAL_17"
     name: "日本骨科协会颈椎脊髓功能评分（颈椎 JOA 17 分制）"
@@ -240,7 +240,7 @@ scales:
         max_score: 17
     improvement_rate_formula: "(post_score - pre_score) / (17 - pre_score) * 100"
     references:
-      - "日本骨科协会（JOA）颈椎脊髓病评定标准（17 分制）"
+      - "Hirabayashi K, et al. Operative results and postoperative progression of ossification among patients with ossification of cervical posterior longitudinal ligament. Spine (Phila Pa 1976). 1981;6(4):354-364.（日本骨科协会 JOA 颈椎 17 分制与平林法改善率标准）"
 
   - scale_id: "JOA_LUMBAR_29"
     name: "日本骨科协会下腰痛功能评分（腰椎 JOA 29 分制）"
@@ -358,4 +358,4 @@ scales:
         max_score: 29
     improvement_rate_formula: "(post_score - pre_score) / (29 - pre_score) * 100"
     references:
-      - "日本骨科协会（JOA）下腰痛评价表（29 分制）"
+      - "Izumida S, Inoue S. Assessment of treatment for low back pain. J Jpn Orthop Assoc. 1986;60:391-394.（日本骨科协会 JOA 下腰痛 29 分制评定标准）"

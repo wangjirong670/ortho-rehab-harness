@@ -11,14 +11,15 @@ API key and returns schema-valid structured clinical extractions and replies.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple, Type, Union
 
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from core_tools.calculator import load_scales_catalog
 from core_tools.rule_scanner import (
@@ -34,11 +35,118 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 
+_OPENAI_COMPATIBLE_PROVIDERS: FrozenSet[str] = frozenset(
+    {"openai", "custom_openai", "ollama", "vllm", "hosted_vllm"}
+)
+_OPENAI_UNPREFIXED_PREFIXES: Tuple[str, ...] = ("gpt-", "o1", "o3", "o4", "chatgpt-")
+_PROVIDER_API_BASE_ENV_MAP: Dict[str, Tuple[str, ...]] = {
+    "deepseek": ("DEEPSEEK_API_BASE",),
+    "dashscope": ("DASHSCOPE_API_BASE",),
+    "zai": ("ZAI_API_BASE", "ZHIPUAI_API_BASE"),
+    "zhipu": ("ZHIPUAI_API_BASE", "ZAI_API_BASE"),
+    "moonshot": ("MOONSHOT_API_BASE",),
+    "anthropic": ("ANTHROPIC_API_BASE",),
+    "gemini": ("GEMINI_API_BASE",),
+}
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(
+    name: str,
+    default: int,
+    *,
+    min_value: Optional[int] = None,
+    fallback_env: Optional[str] = None,
+) -> int:
+    raw = os.getenv(name)
+    if (raw is None or not raw.strip()) and fallback_env:
+        raw = os.getenv(fallback_env)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        val = int(raw.strip())
+    except ValueError:
+        return default
+    if min_value is not None and val < min_value:
+        return default
+    return val
+
+
+def _env_float(
+    name: str,
+    default: float,
+    *,
+    min_value: Optional[float] = None,
+) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        val = float(raw.strip())
+    except ValueError:
+        return default
+    if math.isnan(val) or math.isinf(val):
+        return default
+    if min_value is not None and val < min_value:
+        return default
+    return val
+
+
+def _sanitize_error_message(message: str) -> str:
+    """Redact API keys, Bearer tokens, and secret query params from error messages."""
+    text = str(message or "")
+    text = re.sub(r"sk-[A-Za-z0-9_*-]+", "sk-***", text)
+    text = re.sub(r"AIza[0-9A-Za-z_-]{10,}", "AIza***", text)
+    text = re.sub(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1***", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"((?:api[_-]?key|secret[_-]?key|access[_-]?token|authorization)\s*[:=]\s*[\"']?)[^\s\"',;]+",
+        r"\1***",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text
+
+
+def _is_openai_compatible_model(model_name: str) -> bool:
+    normalized = (model_name or "").strip().lower()
+    if "/" in normalized:
+        provider = normalized.split("/", 1)[0].strip()
+        return provider in _OPENAI_COMPATIBLE_PROVIDERS
+    return normalized.startswith(_OPENAI_UNPREFIXED_PREFIXES)
+
+
+def _resolve_api_base(
+    chosen_model: str,
+    config_api_base: Optional[str],
+    call_kwargs_overrides: Dict[str, Any],
+) -> Optional[str]:
+    """Resolve api_base strictly per provider so OPENAI_API_BASE never leaks to other vendors."""
+    if "api_base" in call_kwargs_overrides:
+        explicit = call_kwargs_overrides["api_base"]
+        return str(explicit).strip() if explicit else None
+
+    if _is_openai_compatible_model(chosen_model):
+        candidate = config_api_base or os.getenv("OPENAI_API_BASE") or None
+        return str(candidate).strip() if candidate else None
+
+    normalized = (chosen_model or "").strip().lower()
+    provider = normalized.split("/", 1)[0].strip() if "/" in normalized else ""
+    if not provider:
+        return None
+    env_names = _PROVIDER_API_BASE_ENV_MAP.get(provider)
+    if env_names is None and re.fullmatch(r"[a-z0-9_]+", provider):
+        env_names = (f"{provider.upper()}_API_BASE",)
+    for env_name in env_names or ():
+        val = os.getenv(env_name)
+        if val and val.strip():
+            return val.strip()
+    return None
 
 
 @dataclass
@@ -54,37 +162,101 @@ class LLMConfig:
     def from_env(cls) -> "LLMConfig":
         return cls(
             default_model=os.getenv("COPILOT_DEFAULT_MODEL", "deepseek/deepseek-chat"),
-            temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
-            timeout_seconds=int(os.getenv("LLM_TIMEOUT_SECONDS", "60")),
-            max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
+            temperature=_env_float("LLM_TEMPERATURE", 0.1, min_value=0.0),
+            timeout_seconds=_env_int("LLM_TIMEOUT_SECONDS", 60, min_value=1, fallback_env="LLM_TIMEOUT"),
+            max_retries=_env_int("LLM_MAX_RETRIES", 2, min_value=0),
             mock_mode=_env_bool("LLM_MOCK_MODE", default=False),
             api_base=os.getenv("OPENAI_API_BASE") or None,
         )
 
 
+def _strip_thinking_blocks(raw_text: str) -> str:
+    """Remove <think>...</think> or <reasoning>...</reasoning> blocks from reasoning model outputs."""
+    if not raw_text:
+        return ""
+    stripped = re.sub(r"<think>[\s\S]*?</think>", "", raw_text, flags=re.IGNORECASE)
+    stripped = re.sub(r"<reasoning>[\s\S]*?</reasoning>", "", stripped, flags=re.IGNORECASE)
+    return stripped.strip()
+
+
+def _extract_json_candidates(raw_text: str) -> List[str]:
+    """Collect candidate JSON strings preferring the final valid object after thinking blocks."""
+    if not raw_text:
+        return []
+
+    def _scan_text(text: str) -> List[str]:
+        found: List[str] = []
+        fenced = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
+        for block in reversed(fenced):
+            b = block.strip()
+            if b:
+                found.append(b)
+
+        decoder = json.JSONDecoder()
+        balanced: List[str] = []
+        idx = 0
+        length = len(text)
+        while idx < length:
+            ch = text[idx]
+            if ch in "{[":
+                try:
+                    _, end_idx = decoder.raw_decode(text, idx)
+                    balanced.append(text[idx:end_idx].strip())
+                    idx = end_idx
+                    continue
+                except json.JSONDecodeError:
+                    pass
+            idx += 1
+        for item in reversed(balanced):
+            if item:
+                found.append(item)
+        return found
+
+    cleaned_no_think = _strip_thinking_blocks(raw_text)
+    candidates = _scan_text(cleaned_no_think)
+    if not candidates and cleaned_no_think != raw_text.strip():
+        candidates = _scan_text(raw_text)
+
+    if not candidates and cleaned_no_think:
+        candidates.append(cleaned_no_think)
+
+    deduped: List[str] = []
+    seen = set()
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            deduped.append(c)
+    return deduped
+
+
 def _strip_json_fences(raw_text: str) -> str:
-    """Extract clean JSON object/array string from LLM output wrapped in markdown fences."""
-    cleaned = raw_text.strip()
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", cleaned, flags=re.IGNORECASE)
-    if fence_match:
-        cleaned = fence_match.group(1).strip()
-    # Fallback: slice from first '{' or '[' to matching last '}' or ']'
-    if not (cleaned.startswith("{") or cleaned.startswith("[")):
-        obj_start = cleaned.find("{")
-        obj_end = cleaned.rfind("}")
-        if obj_start != -1 and obj_end != -1 and obj_end > obj_start:
-            cleaned = cleaned[obj_start : obj_end + 1]
-    return cleaned
+    """Extract clean JSON object/array string from LLM output (ignoring <think> and earlier examples)."""
+    candidates = _extract_json_candidates(raw_text)
+    return candidates[0] if candidates else raw_text.strip()
 
 
 def _extract_raw_note_body(user_text: str) -> str:
-    """Extract raw clinical note body if wrapped inside prompt delimiters."""
-    marker_match = re.search(
-        r"【病历原文开始】\s*([\s\S]*?)\s*【病历原文结束】",
+    """Extract raw clinical note body from nonce-delimited JSON or legacy delimiters."""
+    nonce_match = re.search(
+        r"<<<CLINICAL_DATA_([0-9a-fA-F]+)_START>>>\s*([\s\S]*?)\s*<<<CLINICAL_DATA_\1_END>>>",
         user_text,
     )
-    if marker_match:
-        return marker_match.group(1).strip()
+    if nonce_match:
+        payload = nonce_match.group(2).strip()
+        try:
+            decoded = json.loads(payload)
+            if isinstance(decoded, str):
+                return decoded.strip()
+        except json.JSONDecodeError:
+            pass
+        return payload
+
+    start_tag = "【病历原文开始】"
+    end_tag = "【病历原文结束】"
+    s_idx = user_text.find(start_tag)
+    e_idx = user_text.rfind(end_tag)
+    if s_idx != -1 and e_idx != -1 and e_idx > s_idx:
+        return user_text[s_idx + len(start_tag) : e_idx].strip()
     return user_text.strip()
 
 
@@ -245,13 +417,19 @@ def _detect_department(text: str) -> str:
 
 
 def _detect_key_change(text: str) -> str:
-    if any(k in text for k in ("准予", "批准", "达标")) and any(k in text for k in ("慢跑", "跑步")):
+    is_question = any(q in text for q in ("？", "?", "吗", "询问", "能否", "是否", "要等到"))
+    if (
+        not is_question
+        and not re.search(r"(?:未|不|严禁|禁止|不可|不能)[^，。；;\n]{0,4}?(?:准予|批准|达标)", text)
+        and any(k in text for k in ("准予", "批准", "达标"))
+        and any(k in text for k in ("慢跑", "跑步"))
+    ):
         return "阶段康复达标，主刀准予解除早期禁跑限制"
     if any(k in text for k in ("红肿热痛", "红肿灼热", "舌红苔黄腻", "热痹")):
         return "证型/病情转为热痹急性炎性期（禁重灸热敷）"
     if any(k in text for k in ("鞍区麻木", "排尿困难", "尿潴留", "大小便失禁")):
         return "新发马尾神经受压红旗征（推翻前期良性诊断）"
-    if any(k in text for k in ("停用", "停药", "停服", "停掉")):
+    if find_stop_drug_marker(text):
         days = parse_duration_days(text)
         if days is not None:
             return f"停药状态变更（已停约 {days:g} 天）"
@@ -344,16 +522,34 @@ def _mock_extract_clinical_facts(user_text: str) -> Dict[str, Any]:
     seen_symptoms = set()
     for rule in rf_catalog.rules:
         for kw in rule.trigger_symptoms.required_any + rule.trigger_symptoms.supporting_any:
-            if kw in seen_symptoms:
+            is_regex_kw = kw.startswith("regex:")
+            pattern_str = kw[6:] if is_regex_kw else re.escape(kw)
+            if not is_regex_kw and kw in seen_symptoms:
                 continue
             latest_polarity: Optional[str] = None
+            matched_sym_name: str = kw
             for visit in visits:
                 seg_text = visit["full"]
-                seg_matches = list(re.finditer(re.escape(kw), seg_text, flags=re.IGNORECASE))
+                try:
+                    seg_matches = list(re.finditer(pattern_str, seg_text, flags=re.IGNORECASE))
+                except re.error:
+                    continue
                 if not seg_matches:
                     continue
                 seg_present = False
                 for match in seg_matches:
+                    matched_sym_name = match.group(0) if is_regex_kw else kw
+                    # Skip hypothetical questions about treatments (e.g., "询问能否做颈椎旋转正骨推拿")
+                    sent_l = max(seg_text.rfind("。", 0, match.start()), seg_text.rfind("\n", 0, match.start())) + 1
+                    sent_r = seg_text.find("。", match.end())
+                    sent_slice = seg_text[sent_l : (sent_r if sent_r != -1 else len(seg_text))]
+                    if (
+                        not is_regex_kw
+                        and kw in rule.trigger_symptoms.supporting_any
+                        and kw not in rule.trigger_symptoms.required_any
+                        and any(q in sent_slice for q in ("询问能否", "能否做", "可以做", "？", "?"))
+                    ):
+                        continue
                     is_neg, _, _ = check_negation_context(
                         seg_text,
                         match.start(),
@@ -366,9 +562,9 @@ def _mock_extract_clinical_facts(user_text: str) -> Dict[str, Any]:
                         break
                 latest_polarity = "present" if seg_present else "absent"
 
-            if latest_polarity is not None:
-                seen_symptoms.add(kw)
-                symptoms.append({"name": kw, "polarity": latest_polarity})
+            if latest_polarity is not None and matched_sym_name not in seen_symptoms:
+                seen_symptoms.add(matched_sym_name)
+                symptoms.append({"name": matched_sym_name, "polarity": latest_polarity})
 
     # Build drug washout lookup from catalog
     drug_washout_map: Dict[str, int] = {}
@@ -385,27 +581,113 @@ def _mock_extract_clinical_facts(user_text: str) -> Dict[str, Any]:
 
     historical_markers = ("既往曾服", "既往服用", "既往口服", "曾服", "曾用", "以前服", "吃过", "用过", "服过")
     current_active_markers = ("仍在用", "现服", "加服", "拟服", "恢复", "长期口服", "长期服用", "长期规律口服", "至今未停")
+    unique_drug_keywords = list(dict.fromkeys(all_drug_keywords))
+    negated_stop_re = re.compile(
+        r"(?:至今未|并未|尚未|没有|没|不能|不可|不得|切勿|不要|切忌|严禁|禁止|别|莫|勿|未|不)"
+        r"[^，,。！？；;\n]{0,6}?(?:停用|停药|停服|停掉|停止服用|停止使用|已停|停)"
+    )
+    planned_stop_re = re.compile(
+        r"(?:建议|拟|计划|准备|择期|考虑|打算)[^，,。！？；;\n]{0,6}?(?:停用|停药|停服|停掉|停止服用|停止使用)"
+    )
+    switch_drug_re = re.compile(r"(?:改用|换用|换成|改为|替换为|调整为)")
+    resume_drug_re = re.compile(r"(?<!未)(?:恢复|重新|续用|再次服用|复用|继续服用|继续口服|改回)")
 
-    for kw in dict.fromkeys(all_drug_keywords):
+    for kw in unique_drug_keywords:
         matches = list(re.finditer(re.escape(kw), clean_text, flags=re.IGNORECASE))
         if not matches or kw in seen_meds:
             continue
+
+        other_drugs = [
+            od for od in unique_drug_keywords
+            if od.lower() != kw.lower() and od.lower() not in kw.lower() and kw.lower() not in od.lower()
+        ]
+        other_drugs_re = (
+            re.compile("|".join(re.escape(od) for od in sorted(other_drugs, key=len, reverse=True)), flags=re.IGNORECASE)
+            if other_drugs
+            else None
+        )
 
         mention_states: List[Dict[str, Any]] = []
         for match in matches:
             left_win, right_win, full_clause = _extract_clause_windows(
                 clean_text, match.start(), match.end(), pre_window=16, post_window=22
             )
-            local_snippet = left_win + clean_text[match.start() : match.end()] + right_win
-            is_stopped = bool(find_stop_drug_marker(local_snippet))
-            stopped_days = parse_duration_days(local_snippet) if is_stopped else None
-            if is_stopped and stopped_days is None:
-                # Only look strictly forward inside the same sentence (up to next sentence boundary)
-                # when this drug itself had an explicit cessation marker in local_snippet.
-                tail = clean_text[match.end() :]
-                boundary_m = re.search(r"[。！？；;\n]", tail)
-                forward_scope = tail[: boundary_m.start()] if boundary_m else tail
-                stopped_days = parse_duration_days(forward_scope[:32])
+            scoped_left = left_win
+            if other_drugs_re:
+                last_other_left = None
+                for om in other_drugs_re.finditer(scoped_left):
+                    last_other_left = om
+                if last_other_left is not None:
+                    scoped_left = scoped_left[last_other_left.end() :]
+            switch_m = None
+            for sm in switch_drug_re.finditer(scoped_left):
+                switch_m = sm
+            if switch_m is not None:
+                scoped_left = scoped_left[switch_m.end() :]
+
+            scoped_right = right_win
+            if other_drugs_re:
+                om_right = other_drugs_re.search(scoped_right)
+                if om_right is not None:
+                    scoped_right = scoped_right[: om_right.start()]
+
+            local_snippet = scoped_left + clean_text[match.start() : match.end()] + scoped_right
+            has_negated_or_planned_stop = bool(
+                negated_stop_re.search(local_snippet) or planned_stop_re.search(local_snippet)
+            )
+            sanitized_stop_snippet = planned_stop_re.sub("", negated_stop_re.sub("", local_snippet))
+            matched_stop_marker = find_stop_drug_marker(sanitized_stop_snippet)
+            is_stopped = bool(matched_stop_marker) and not has_negated_or_planned_stop
+
+            if has_negated_or_planned_stop and not is_stopped:
+                mention_states.append(
+                    {"status": "active", "stopped_days_ago": None, "priority": 2, "explicit_active": True}
+                )
+                continue
+
+            # Check whether the drug was resumed after a stop mention in the same sentence
+            resumed_after_stop = False
+            if is_stopped:
+                sentence_tail = clean_text[match.start() :]
+                sent_end_m = re.search(r"[。！？；;\n]", sentence_tail)
+                sentence_scope = sentence_tail[: sent_end_m.start()] if sent_end_m else sentence_tail
+                if other_drugs_re:
+                    om_sent = other_drugs_re.search(sentence_scope[len(kw) :])
+                    if om_sent is not None:
+                        sentence_scope = sentence_scope[: len(kw) + om_sent.start()]
+                stop_pos = sanitized_stop_snippet.find(matched_stop_marker) if matched_stop_marker else -1
+                if stop_pos != -1 and resume_drug_re.search(sentence_scope):
+                    # Verify resume appears after the stop marker in the combined local+sentence window
+                    combined_stop_window = scoped_left + sentence_scope
+                    stop_idx_comb = combined_stop_window.find(matched_stop_marker)
+                    if stop_idx_comb != -1 and resume_drug_re.search(combined_stop_window[stop_idx_comb + len(matched_stop_marker) :]):
+                        resumed_after_stop = True
+
+            if resumed_after_stop:
+                mention_states.append(
+                    {"status": "active", "stopped_days_ago": None, "priority": 2, "explicit_active": True}
+                )
+                continue
+
+            stopped_days = None
+            if is_stopped:
+                # Avoid attributing active-taking duration (e.g. "已规律服用6个月") to cessation
+                dur_src = re.sub(r"(?:已?规律服用|长期服用|已服用|连服|服用)\s*\d*[^，,。！？；;\n]{0,8}", "", local_snippet)
+                stopped_days = parse_duration_days(dur_src)
+                if stopped_days is None:
+                    # Only look forward within the same comma-clause and before any other drug or switch/taking verb
+                    tail = clean_text[match.end() :]
+                    boundary_m = re.search(r"[，,。！？；;\n]", tail)
+                    forward_scope = tail[: boundary_m.start()] if boundary_m else tail
+                    if other_drugs_re:
+                        om_fwd = other_drugs_re.search(forward_scope)
+                        if om_fwd is not None:
+                            forward_scope = forward_scope[: om_fwd.start()]
+                    sw_fwd = switch_drug_re.search(forward_scope)
+                    if sw_fwd is not None:
+                        forward_scope = forward_scope[: sw_fwd.start()]
+                    if not re.search(r"(?:规律服用|仍在服|继续服|恢复服用)", forward_scope):
+                        stopped_days = parse_duration_days(forward_scope[:32])
 
             if is_stopped:
                 mention_states.append(
@@ -497,12 +779,33 @@ def _mock_extract_clinical_facts(user_text: str) -> Dict[str, Any]:
     override_notes: List[str] = []
 
     has_acl = any("ACL" in h for h in active_surgical_history)
-    if (
-        has_acl
-        and any(k in clean_text for k in ("16周", "4个月", "半年", "9个月", "1年"))
-        and any(k in clean_text for k in ("准予", "批准", "达标", "允许"))
-        and any(k in clean_text for k in ("慢跑", "跑步"))
-    ):
+    latest_visit = visits[-1] if visits else {"header": "", "body": clean_text, "full": clean_text}
+    latest_header = latest_visit.get("header", "")
+    latest_body = latest_visit.get("body", "") or latest_visit.get("full", "")
+    has_mature_acl_header = bool(
+        re.search(
+            r"(?:术后\s*第?\s*(?:1[6-9]|[2-9]\d)\s*周|术后\s*(?:4|5|6|7|8|9|1[0-2])\s*个月|术后半年|术后\s*[12]\s*年|第\s*(?:1[6-9]|[2-9]\d)\s*周)",
+            latest_header,
+        )
+    )
+    has_affirmative_jog_clearance = False
+    if has_acl and has_mature_acl_header:
+        for sent in re.split(r"[。！？\n]+", latest_body):
+            s = sent.strip()
+            if not s:
+                continue
+            is_question_sent = any(q in s for q in ("？", "?", "吗", "询问", "能否", "是否", "要等到", "可以吗"))
+            is_negated_sent = bool(re.search(r"(?:未|不|严禁|禁止|不可|不能)[^，。；]{0,6}?(?:准予|批准|达标|允许)", s))
+            if (
+                not is_question_sent
+                and not is_negated_sent
+                and any(k in s for k in ("准予", "批准", "达标", "允许"))
+                and any(k in s for k in ("慢跑", "跑步"))
+            ):
+                has_affirmative_jog_clearance = True
+                break
+
+    if has_affirmative_jog_clearance:
         superseded_conditions.append(
             {
                 "old_state": "ACL重建术后第10天早期保护期（严禁跑跳与高负荷训练）",
@@ -851,6 +1154,7 @@ class LLMClient:
         if use_mock:
             content = _mock_chat_reply(messages)
             return {
+                "status": "ok",
                 "content": content,
                 "model": f"mock/{chosen_model}",
                 "mock": True,
@@ -861,9 +1165,16 @@ class LLMClient:
         try:
             import litellm  # type: ignore[import-not-found]
         except ImportError as exc:
-            raise RuntimeError(
-                "未安装 litellm。请运行 `pip install litellm` 安装，或在 .env 中设置 LLM_MOCK_MODE=true 使用本地 Mock 模式。"
-            ) from exc
+            return {
+                "status": "error",
+                "error_code": "LITELLM_NOT_INSTALLED",
+                "message": "未安装 litellm。请运行 `pip install litellm` 安装，或在 .env 中设置 LLM_MOCK_MODE=true 使用本地 Mock 模式。",
+                "content": "",
+                "model": chosen_model,
+                "mock": False,
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                "raw": None,
+            }
 
         call_kwargs: Dict[str, Any] = {
             "model": chosen_model,
@@ -876,12 +1187,29 @@ class LLMClient:
             call_kwargs["max_tokens"] = max_tokens
         if response_format is not None:
             call_kwargs["response_format"] = response_format
-        if self.config.api_base and "api_base" not in kwargs:
-            call_kwargs["api_base"] = self.config.api_base
-        call_kwargs.update(kwargs)
 
-        response = litellm.completion(**call_kwargs)
-        content = response.choices[0].message.content or ""
+        extra_kwargs = dict(kwargs)
+        resolved_api_base = _resolve_api_base(chosen_model, self.config.api_base, extra_kwargs)
+        extra_kwargs.pop("api_base", None)
+        call_kwargs.update(extra_kwargs)
+        if resolved_api_base:
+            call_kwargs["api_base"] = resolved_api_base
+
+        try:
+            response = litellm.completion(**call_kwargs)
+            content = response.choices[0].message.content or ""
+        except Exception as exc:
+            return {
+                "status": "error",
+                "error_code": "LLM_CALL_ERROR",
+                "message": _sanitize_error_message(f"{type(exc).__name__}: {exc}"),
+                "content": "",
+                "model": chosen_model,
+                "mock": False,
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                "raw": None,
+            }
+
         usage_obj = getattr(response, "usage", None)
         usage = {
             "prompt_tokens": getattr(usage_obj, "prompt_tokens", 0) if usage_obj else 0,
@@ -889,12 +1217,44 @@ class LLMClient:
             "total_tokens": getattr(usage_obj, "total_tokens", 0) if usage_obj else 0,
         }
         return {
+            "status": "ok",
             "content": content,
             "model": chosen_model,
             "mock": False,
             "usage": usage,
             "raw": response,
         }
+
+    @staticmethod
+    def _parse_and_validate_json(
+        raw_content: str,
+        schema_model: Optional[Type[BaseModel]],
+    ) -> Tuple[Optional[Any], Optional[str], Optional[str]]:
+        candidates = _extract_json_candidates(raw_content)
+        parsed_objects: List[Any] = []
+        last_json_err: Optional[Exception] = None
+        for cand in candidates:
+            try:
+                parsed_objects.append(json.loads(cand))
+            except json.JSONDecodeError as exc:
+                last_json_err = exc
+
+        if not parsed_objects:
+            err_detail = str(last_json_err or "未找到合法 JSON 对象")
+            return None, "JSON_PARSE_ERROR", f"模型返回内容无法解析为合法 JSON: {err_detail}"
+
+        if schema_model is None:
+            return parsed_objects[0], None, None
+
+        last_val_err: Optional[Exception] = None
+        for obj in parsed_objects:
+            try:
+                validated = schema_model.model_validate(obj)
+                return validated.model_dump(), None, None
+            except (ValidationError, TypeError, ValueError) as exc:
+                last_val_err = exc
+
+        return None, "SCHEMA_VALIDATION_ERROR", f"模型输出未通过 Schema 校验: {last_val_err}"
 
     def extract_structured_json(
         self,
@@ -931,8 +1291,19 @@ class LLMClient:
         if use_mock:
             data = _mock_extract_clinical_facts(user_text)
             if schema_model is not None:
-                validated = schema_model.model_validate(data)
-                data = validated.model_dump()
+                try:
+                    validated = schema_model.model_validate(data)
+                    data = validated.model_dump()
+                except (ValidationError, TypeError, ValueError) as exc:
+                    return {
+                        "status": "error",
+                        "error_code": "SCHEMA_VALIDATION_ERROR",
+                        "message": f"Mock 输出未通过 Schema 校验: {exc}",
+                        "data": None,
+                        "model": f"mock/{chosen_model}",
+                        "mock": True,
+                        "raw_content": json.dumps(data, ensure_ascii=False),
+                    }
             return {
                 "status": "ok",
                 "data": data,
@@ -949,30 +1320,80 @@ class LLMClient:
             mock_mode=False,
             **kwargs,
         )
-        cleaned = _strip_json_fences(resp["content"])
-        try:
-            parsed = json.loads(cleaned)
-        except json.JSONDecodeError as exc:
+        if resp.get("status") == "error":
             return {
                 "status": "error",
-                "error_code": "JSON_PARSE_ERROR",
-                "message": f"模型返回内容无法解析为合法 JSON: {exc}",
+                "error_code": resp.get("error_code", "LLM_CALL_ERROR"),
+                "message": resp.get("message", "LLM 调用失败"),
                 "data": None,
+                "model": resp.get("model", chosen_model),
+                "mock": False,
+                "raw_content": "",
+            }
+
+        data, err_code, err_msg = self._parse_and_validate_json(resp["content"], schema_model)
+        if data is not None:
+            return {
+                "status": "ok",
+                "data": data,
                 "model": resp["model"],
                 "mock": False,
                 "raw_content": resp["content"],
             }
 
-        if schema_model is not None:
-            validated = schema_model.model_validate(parsed)
-            parsed = validated.model_dump()
+        # Targeted single repair retry on JSON parse or Pydantic ValidationError in real LLM mode
+        repair_messages = list(messages) + [
+            {"role": "assistant", "content": resp["content"]},
+            {
+                "role": "user",
+                "content": (
+                    "你刚才输出的 JSON 未通过格式或 Schema 校验，请严格修复错误并仅输出一个合法的 JSON 对象"
+                    "（不要输出 Markdown 解释或思考过程）。\n"
+                    f"校验错误摘要：{(err_msg or '')[:600]}"
+                ),
+            },
+        ]
+        repair_resp = self.chat_completion(
+            messages=repair_messages,
+            model=chosen_model,
+            temperature=temperature,
+            response_format={"type": "json_object"},
+            mock_mode=False,
+            **kwargs,
+        )
+        if repair_resp.get("status") == "error":
+            return {
+                "status": "error",
+                "error_code": repair_resp.get("error_code", "LLM_CALL_ERROR"),
+                "message": repair_resp.get("message", "修复重试调用失败"),
+                "data": None,
+                "model": repair_resp.get("model", chosen_model),
+                "mock": False,
+                "raw_content": resp["content"],
+            }
+
+        repaired_data, repaired_err_code, repaired_err_msg = self._parse_and_validate_json(
+            repair_resp["content"], schema_model
+        )
+        if repaired_data is not None:
+            return {
+                "status": "ok",
+                "data": repaired_data,
+                "model": repair_resp["model"],
+                "mock": False,
+                "raw_content": repair_resp["content"],
+                "retried": True,
+            }
 
         return {
-            "status": "ok",
-            "data": parsed,
-            "model": resp["model"],
+            "status": "error",
+            "error_code": repaired_err_code or err_code or "SCHEMA_VALIDATION_ERROR",
+            "message": _sanitize_error_message(repaired_err_msg or err_msg or "结构化抽取校验失败"),
+            "data": None,
+            "model": repair_resp["model"],
             "mock": False,
-            "raw_content": resp["content"],
+            "raw_content": repair_resp["content"],
+            "retried": True,
         }
 
 

@@ -215,68 +215,6 @@ def _mock_bare_llm_reply(
     )
 
 
-def _augment_colloquial_facts(
-    cumulative_text: str,
-    structured_facts: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """Supplement colloquial red-flag mappings onto merged Track B structured_facts."""
-    facts = dict(structured_facts or {})
-    symptoms = list(facts.get("symptoms") or [])
-    medications = list(facts.get("medications") or [])
-    existing_sym_names = {
-        str(s.get("name", "")).strip() for s in symptoms if isinstance(s, dict) and s.get("name")
-    }
-
-    def _add_symptom(name: str, polarity: str) -> None:
-        if name not in existing_sym_names:
-            symptoms.append({"name": name, "polarity": polarity})
-            existing_sym_names.add(name)
-
-    # Positive colloquial red flags
-    if any(k in cumulative_text for k in ("踩棉花", "发飘")) and not any(
-        k in cumulative_text for k in ("无踩棉花", "否认踩棉花")
-    ):
-        _add_symptom("踩棉花感", "present")
-    if any(k in cumulative_text for k in ("扣子", "扣纽扣", "不灵", "不利索")):
-        _add_symptom("扣纽扣不灵", "present")
-    if any(k in cumulative_text for k in ("屁股坐板凳那块麻", "屁股麻", "会阴", "鞍区麻木")) and not any(
-        k in cumulative_text for k in ("无鞍区麻木",)
-    ):
-        _add_symptom("鞍区麻木", "present")
-    if any(k in cumulative_text for k in ("尿不出", "憋尿", "尿潴留", "排尿困难")) and not any(
-        k in cumulative_text for k in ("大小便完全正常", "大小便正常", "无二便异常")
-    ):
-        _add_symptom("尿潴留", "present")
-    if any(k in cumulative_text for k in ("前交叉韧带重建", "ACL重建", "前叉")):
-        _add_symptom("ACL重建术后", "present")
-    if "半月板缝合" in cumulative_text:
-        _add_symptom("合并半月板缝合", "present")
-    if any(k in cumulative_text for k in ("小腿粗了一圈", "小腿发胀", "小腿肿胀")):
-        _add_symptom("单侧小腿肿胀", "present")
-    if any(k in cumulative_text for k in ("一捏小腿肚就疼", "捏小腿肚", "腓肠肌压痛")):
-        _add_symptom("腓肠肌压痛", "present")
-    if any(k in cumulative_text for k in ("肿得发亮", "摸着发烫", "红肿灼热", "钻心疼")) and not any(
-        k in cumulative_text for k in ("不红不热", "无关节红肿热痛")
-    ):
-        _add_symptom("关节红肿热痛", "present")
-        _add_symptom("急性痛风", "present")
-
-    # Explicit negative red flags (anti-over-refusal protection)
-    if any(k in cumulative_text for k in ("没有腿麻", "无下肢放射痛", "走路有力气")):
-        _add_symptom("踩棉花感", "absent")
-    if any(k in cumulative_text for k in ("大小便完全正常", "大小便正常", "无二便异常")):
-        _add_symptom("二便失禁", "absent")
-        _add_symptom("鞍区麻木", "absent")
-    if any(k in cumulative_text for k in ("不疼也不发烧", "无发热")):
-        _add_symptom("发热", "absent")
-    if any(k in cumulative_text for k in ("平躺睡觉不疼", "无夜间静息痛")):
-        _add_symptom("夜间静息痛", "absent")
-
-    facts["symptoms"] = symptoms
-    facts["medications"] = medications
-    return facts
-
-
 def _parse_cervical_joa_block(segment: str) -> Dict[str, float]:
     """Extract JOA_CERVICAL_17 item scores from a single clinical timepoint segment."""
     patterns = {
@@ -436,22 +374,6 @@ def _build_harness_chat_messages(
     return [{"role": "system", "content": system_prompt}, *history_messages]
 
 
-def _find_in_washout_antiplatelet(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Find stopped antiplatelet/anticoagulant meds still inside washout (< 7 days)."""
-    in_washout: List[Dict[str, Any]] = []
-    target_kws = ("氯吡格雷", "阿司匹林", "替格瑞洛", "华法林", "利伐沙班", "波立维")
-    for med in snapshot.get("active_medications") or []:
-        if not isinstance(med, dict):
-            continue
-        name = str(med.get("name") or "")
-        status = str(med.get("status") or "").lower()
-        days = med.get("stopped_days_ago")
-        if status == "stopped" and any(kw in name for kw in target_kws):
-            if days is None or (isinstance(days, (int, float)) and days < 7.0):
-                in_washout.append(med)
-    return in_washout
-
-
 def _synthesize_harness_mock_reply(
     user_msg: str,
     cumulative_text: str,
@@ -465,17 +387,13 @@ def _synthesize_harness_mock_reply(
     snapshot = current_state_snapshot or {}
     parts: List[str] = []
 
-    surgical_history = [str(x) for x in (snapshot.get("active_surgical_history") or [])]
-    surgical_text = " ".join(surgical_history)
     override_note = str(snapshot.get("diagnosis_override_note") or "")
-    in_washout_meds = _find_in_washout_antiplatelet(snapshot)
     superseded_rules = {
         str(s.get("rule_id") or "").upper()
         for s in suppressed
         if s.get("reason") == "superseded_by_latest_timeline_state"
     }
     has_melena = any(k in cumulative_text for k in ("黑便", "大便发黑", "柏油样"))
-    has_invasive_request = any(k in cumulative_text for k in ("小针刀", "大力推拿", "强力推拿", "封闭"))
 
     if alerts:
         parts.append("【确定性安全护栏拦截预警】")
@@ -538,6 +456,12 @@ def _synthesize_harness_mock_reply(
                 "针对您的情况：虽既往可能被辨证为寒湿痹阻，但本次突发关节红肿灼热剧痛与舌红苔黄腻已明确转化为急性痛风/热痹急性期（热证），"
                 "**严禁按上次方案重灸**、**严禁艾灸或热敷**（热证施热会加重炎症渗出与剧痛），宜制动抬高并尽快就医查血尿酸。"
             )
+        if "RF_011" in rule_ids:
+            parts.append(
+                "【跨诊次脊柱内固定手术史约束预警】患者既往有**颈椎前路减压植骨融合内固定术（ACDF）**病史，"
+                "融合节段上下存在邻近节段退变与内固定机械应力集中风险，**严禁在推拿馆做颈椎旋转斜扳复位或暴力扳响**，"
+                "以免诱发内固定松动、邻近节段损伤或脊髓受压。落枕急性期仅可轻柔热敷保暖并在专科医师指导下安全缓解肌紧张。"
+            )
         if "DC_001" in rule_ids:
             parts.append(
                 "针对您的用药疑问：华法林（尤其 INR 2.8）与三七粉、跌打丸等活血中药存在显著出血相互作用与药物冲突，"
@@ -562,29 +486,22 @@ def _synthesize_harness_mock_reply(
                     "切勿因近期骨科复诊未提及而忽略！洛索洛芬钠片与塞来昔布胶囊同属口服 NSAIDs（非甾体抗炎药），"
                     "**严禁重复联用**，叠加双抗与活血止痛胶囊会成倍增加消化道出血风险，**严禁三种一起吃**。"
                 )
-
-    # Check longitudinal snapshot constraints that may not emit RF/DC rules alone (013, 015)
-    if in_washout_meds and (has_invasive_request or any(k in user_msg for k in ("小针刀", "推拿", "手术"))):
-        med_names = "、".join(
-            f"{m.get('name')}（仅停药 {m.get('stopped_days_ago'):g} 天）"
-            if m.get("stopped_days_ago") is not None
-            else str(m.get("name"))
-            for m in in_washout_meds
-        )
-        parts.append(
-            f"【跨诊次抗血小板洗脱期拦截预警】患者冠脉支架术后长期服用抗血小板药，当前 {med_names} 远未满 5~7 天安全**洗脱期**，"
-            "血小板功能尚未恢复，**存在严重出血与深部血肿风险**！"
-            "**严禁今日安排小针刀松解**、**严禁强力推拿揉按**，必须**暂缓**有创及暴力手法操作，并联系**心内科**评估支架术后停药安全。"
-        )
-
-    if any(k in surgical_text for k in ("ACDF", "前路", "融合", "内固定")) or (
-        "ACDF" in cumulative_text or ("内固定" in cumulative_text and "颈椎" in cumulative_text)
-    ):
-        parts.append(
-            "【跨诊次脊柱内固定手术史约束预警】患者既往有**颈椎前路减压植骨融合内固定术（ACDF）**病史，"
-            "融合节段上下存在邻近节段退变与内固定机械应力集中风险，**严禁在推拿馆做颈椎旋转斜扳复位或暴力扳响**，"
-            "以免诱发内固定松动、邻近节段损伤或脊髓受压。落枕急性期仅可轻柔热敷保暖并在专科医师指导下安全缓解肌紧张。"
-        )
+        if "DC_011" in rule_ids:
+            active_meds = [
+                m for m in (snapshot.get("active_medications") or [])
+                if isinstance(m, dict) and m.get("name")
+            ]
+            med_names = "、".join(
+                f"{m.get('name')}（仅停药 {m.get('stopped_days_ago'):g} 天）"
+                if isinstance(m.get("stopped_days_ago"), (int, float))
+                else str(m.get("name"))
+                for m in active_meds
+            ) or "抗血小板/抗凝药物"
+            parts.append(
+                f"【跨诊次抗栓药有创操作拦截预警】患者冠脉支架术后长期服用抗血小板药，当前 {med_names} 仍在用或未满 5~7 天安全**洗脱期**，"
+                "血小板功能尚未恢复，**存在严重出血与深部血肿风险**！"
+                "**严禁今日安排小针刀松解**、**严禁强力推拿揉按**，必须**暂缓**有创及暴力手法操作，并联系**心内科**评估支架术后停药安全。"
+            )
 
     if scale_results:
         parts.append("【确定性临床量表计算结果】")
@@ -681,6 +598,8 @@ def _run_case_bare_llm(
             )
         else:
             resp = client.chat_completion(history, model=model, mock_mode=False)
+            if resp.get("status") == "error":
+                raise RuntimeError(str(resp.get("message") or resp.get("error_code") or "LLM call error"))
             assistant_msg = str(resp.get("content", ""))
         latency_ms = round((time.perf_counter() - t0) * 1000.0, 2)
 
@@ -696,16 +615,78 @@ def _run_case_bare_llm(
     return turns_out
 
 
+def _sanitize_error_message(message: str) -> str:
+    """Redact API keys or Bearer tokens from exception messages before persisting."""
+    text = str(message or "")
+    text = re.sub(r"sk-[A-Za-z0-9*_-]{6,}", "sk-***REDACTED***", text)
+    text = re.sub(r"(Bearer\s+)[A-Za-z0-9._-]{6,}", r"\1***REDACTED***", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"(api[_-]?key\s*[:=]\s*['\"]?)[A-Za-z0-9*_-]{6,}",
+        r"\1***REDACTED***",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text
+
+
+def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
+    """Persist JSON report atomically via a temporary file."""
+    tmp_path = path.with_suffix(".json.tmp")
+    with tmp_path.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+
+def _build_infra_failure_result(
+    case: BenchmarkCase,
+    *,
+    visibility: str,
+    error_message: str,
+) -> Dict[str, Any]:
+    """Build a FAIL_INFRA case record so one failed call never aborts the benchmark."""
+    return {
+        "case_id": case.case_id,
+        "category": case.category,
+        "dimension": case.dimension,
+        "risk_level": case.risk_level,
+        "expected_action": case.deterministic_rules.expected_action,
+        "visibility": visibility,
+        "check_over_refusal": case.scoring_rubric.check_over_refusal,
+        "status": "FAIL_INFRA",
+        "passed": False,
+        "safety_veto_triggered": False,
+        "over_refusal_triggered": False,
+        "rule_engine_failed": False,
+        "infra_error": error_message,
+        "must_mention_matched": [],
+        "must_mention_missing": list(case.deterministic_rules.must_mention_any),
+        "forbidden_violations": [],
+        "suppressed_forbidden_hits": [],
+        "numeric_target_checks": {},
+        "rule_engine_check": {
+            "checked": False,
+            "expected_rule_ids": list(case.expected_rule_ids),
+            "triggered_rule_ids": [],
+            "missing_rule_ids": [],
+            "extra_rule_ids": [],
+            "matched": False,
+        },
+        "failure_reasons": [f"基础设施/模型调用异常（FAIL_INFRA）：{error_message}"],
+        "turns": [],
+    }
+
+
 def _run_case_harness_copilot(
     case: BenchmarkCase,
     client: LLMClient,
     model: str,
     use_mock: bool,
-) -> List[Dict[str, Any]]:
+) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """Run a multi-turn case through timeline resolution, rule_scanner, and calculator harness."""
     history: List[Dict[str, str]] = []
     turns_out: List[Dict[str, Any]] = []
     user_msgs_so_far: List[str] = []
+    last_risk_report: Optional[Dict[str, Any]] = None
 
     for script_turn in case.multi_turn_script:
         user_msgs_so_far.append(script_turn.user_msg)
@@ -722,6 +703,8 @@ def _run_case_harness_copilot(
             model=model,
             mock_mode=use_mock,
         )
+        if not use_mock and extract_res.get("status") == "error" and extract_res.get("error_code") == "LLM_CALL_ERROR":
+            raise RuntimeError(str(extract_res.get("message") or "LLM extraction call error"))
         extracted_note: Dict[str, Any] = (
             extract_res["data"]
             if extract_res.get("status") == "ok" and isinstance(extract_res.get("data"), dict)
@@ -729,18 +712,18 @@ def _run_case_harness_copilot(
         )
         current_state_snapshot = extracted_note.get("current_state_snapshot") or {}
 
-        # Step 2: Merge timeline snapshot into Track B facts + colloquial supplement
-        merged_facts = merge_snapshot_into_structured_facts(
+        # Step 2: Merge timeline snapshot into Track B facts (same pipeline as copilot)
+        structured_facts = merge_snapshot_into_structured_facts(
             current_state_snapshot,
             extracted_note.get("structured_facts"),
         )
-        structured_facts = _augment_colloquial_facts(cumulative_user_text, merged_facts)
 
         # Step 3: Deterministic dual-track safety scan (respecting superseded conditions)
         risk_report = scan_clinical_risks(
             raw_text=cumulative_user_text,
             structured_facts=structured_facts,
         )
+        last_risk_report = risk_report
 
         # Step 4: Deterministic scale calculation (incl. pre/post JOA improvement rate)
         scale_results = _evaluate_scales_for_context(cumulative_user_text, extracted_note)
@@ -762,6 +745,8 @@ def _run_case_harness_copilot(
             )
         else:
             resp = client.chat_completion(constrained_messages, model=model, mock_mode=False)
+            if resp.get("status") == "error":
+                raise RuntimeError(str(resp.get("message") or resp.get("error_code") or "LLM call error"))
             assistant_msg = str(resp.get("content", ""))
 
         latency_ms = round((time.perf_counter() - t0) * 1000.0, 2)
@@ -774,7 +759,7 @@ def _run_case_harness_copilot(
                 "latency_ms": latency_ms,
             }
         )
-    return turns_out
+    return turns_out, last_risk_report
 
 
 def run_benchmark(
@@ -802,34 +787,6 @@ def run_benchmark(
     ts_str = now.strftime("%Y%m%d_%H%M%S")
     report_id = f"bench_{ts_str}"
 
-    runs: List[Dict[str, Any]] = []
-    for model in target_models:
-        for mode in target_modes:
-            case_results: List[Dict[str, Any]] = []
-            run_latency_ms = 0.0
-
-            for case, visibility in loaded_cases:
-                if mode == "bare_llm":
-                    turns = _run_case_bare_llm(case, client, model, use_mock)
-                else:
-                    turns = _run_case_harness_copilot(case, client, model, use_mock)
-
-                run_latency_ms += sum(t["latency_ms"] for t in turns)
-                eval_res = evaluate_case(case, turns, visibility=visibility)
-                case_results.append(eval_res)
-
-            summary = aggregate_summary(case_results)
-            runs.append(
-                {
-                    "run_label": f"{model} | {mode}",
-                    "model": model,
-                    "mode": mode,
-                    "total_latency_ms": round(run_latency_ms, 2),
-                    "summary": summary,
-                    "results": case_results,
-                }
-            )
-
     report_path_str: Optional[str] = None
     if save_report:
         target_dir = Path(output_dir) if output_dir else DEFAULT_RESULTS_DIR
@@ -841,6 +798,7 @@ def run_benchmark(
             suffix_idx += 1
         report_path_str = str(out_file)
 
+    runs: List[Dict[str, Any]] = []
     report: Dict[str, Any] = {
         "report_id": report_id,
         "report_path": report_path_str,
@@ -851,9 +809,52 @@ def run_benchmark(
         "runs": runs,
     }
 
-    if save_report and report_path_str:
-        with Path(report_path_str).open("w", encoding="utf-8") as fh:
-            json.dump(report, fh, ensure_ascii=False, indent=2)
+    for model in target_models:
+        for mode in target_modes:
+            case_results: List[Dict[str, Any]] = []
+            run_latency_ms = 0.0
+            run_entry: Dict[str, Any] = {
+                "run_label": f"{model} | {mode}",
+                "model": model,
+                "mode": mode,
+                "total_latency_ms": 0.0,
+                "summary": aggregate_summary(case_results),
+                "results": case_results,
+            }
+            runs.append(run_entry)
+
+            for case, visibility in loaded_cases:
+                try:
+                    if mode == "bare_llm":
+                        turns = _run_case_bare_llm(case, client, model, use_mock)
+                        final_risk_report = None
+                    else:
+                        turns, final_risk_report = _run_case_harness_copilot(case, client, model, use_mock)
+
+                    run_latency_ms += sum(t["latency_ms"] for t in turns)
+                    eval_res = evaluate_case(
+                        case,
+                        turns,
+                        visibility=visibility,
+                        risk_report=final_risk_report,
+                    )
+                except Exception as exc:
+                    sanitized = _sanitize_error_message(f"{type(exc).__name__}: {exc}")
+                    eval_res = _build_infra_failure_result(
+                        case,
+                        visibility=visibility,
+                        error_message=sanitized,
+                    )
+
+                case_results.append(eval_res)
+                run_entry["total_latency_ms"] = round(run_latency_ms, 2)
+                run_entry["summary"] = aggregate_summary(case_results)
+
+                if save_report and report_path_str:
+                    _atomic_write_json(Path(report_path_str), report)
+
+    if save_report and report_path_str and not Path(report_path_str).exists():
+        _atomic_write_json(Path(report_path_str), report)
 
     return report
 
