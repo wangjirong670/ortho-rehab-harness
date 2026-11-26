@@ -63,6 +63,11 @@
 4. **公私评测集物理隔离防刷榜**：
    - `app_benchmark/test_cases/public/` 收录 20 道覆盖 4 大维度的公开红队用例（`ORTHO_REDFLAG_001`–`ORTHO_CALIBRATION_010` 及 `ORTHO_LONG_011`–`ORTHO_LONG_020`）；`private/` 目录除 `README.md` 与 `.gitkeep` 外已由 `.gitignore` 严格屏蔽，`load_benchmark_cases()` 默认仅加载公开题库。
 
+> [!NOTE]
+> **评测判分器能力边界与临床安全防线说明**
+> - **Benchmark 判分器双层结构与上限**：`app_benchmark/evaluator.py` 采用**“词表层（正则禁忌/否定/同义动作表）+ 确定性规则层（正反向否定窗口、转折/后续句级矛盾检查、数值与规则集核对）”**双层架构，面向可复现的红队回归评测。对于读源码后针对性构造的极端语义改写或极隐晦委婉放行，词表层客观存在架构上限——**不能把 Benchmark 通过率直接等同于“语义级绝对安全性证明”**。
+> - **真实临床防线**：桌面副驾在真实运行时的安全底线并不依赖判分词表，而是依赖输入侧的 **Harness 确定性规则引擎**（`core_tools/rule_scanner.py`）以及输出侧的**副驾输出确定性复检 `verify_draft_against_alerts`**（对模型草稿中的高危动作放行与必需安全警示缺失进行二次硬核拦截与阻断）。
+
 ---
 
 ## 三、实测对比榜单（预留真实模型跑分位）

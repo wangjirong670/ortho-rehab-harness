@@ -445,6 +445,111 @@ _NON_DRUG_EXACT_TERMS: FrozenSet[str] = frozenset(
     }
 )
 
+_MOCK_STOP_MARKERS: Tuple[str, ...] = (
+    "早已停",
+    "未再服用",
+    "停止服用",
+    "停止使用",
+    "未服用",
+    "自行停用",
+    "自行停药",
+    "自己停了",
+    "自己停药",
+    "自己停掉",
+    "自己停的",
+    "已停用",
+    "已停药",
+    "停用了",
+    "停掉了",
+    "停药",
+    "停用",
+    "停服",
+    "停掉",
+    "已停",
+    "停了",
+    "停的",
+)
+
+_MOCK_NEGATED_STOP_RE = re.compile(
+    r"(?:至今未|并未|尚未|没有|不能|不可|不得|切勿|不要|切忌|严禁|禁止|勿|未|别|莫|没|不)"
+    r"[^，,。！？；;\n但却诉见]{0,6}?"
+    r"(?:自行停用|自行停药|自己停了|自己停药|自己停掉|自己停的|已停用|已停药|停用了|停掉了|停止服用|停止使用|停用|停药|停服|停掉|已停|停了|停的|停)"
+)
+
+_MOCK_PLANNED_STOP_RE = re.compile(
+    r"(?:(?:建议|拟|计划|准备|择期|考虑|打算|欲|需|需要|应该|应当)[^，,。！？；;\n]{0,6}?"
+    r"|听说[^，,。！？；;\n]{0,8}?(?:要|需)"
+    r"|(?:是否|能否|要不要|需要|需不需要|该不该)[^，,。！？；;\n]{0,4}?)"
+    r"(?:自行停用|自行停药|自己停了|自己停药|自己停掉|自己停的|停止服用|停止使用|停用|停药|停服|停掉|停了|停的|停)"
+)
+
+_MOCK_RESUME_DRUG_RE = re.compile(
+    r"(?:恢复(?:服用|用药|使用|吃)?|重新(?:服用|用药|使用|启用|吃)?|续用|再次服用|再次使用|再服|复用|复服|继续服用|继续口服|改回)"
+)
+_MOCK_NEGATED_RESUME_PREFIX_RE = re.compile(r"(?:未|没|切勿|不要|不能|不可|禁止|严禁)[^，,。！？；;\n]{0,3}$")
+_ACTIVE_TAKING_DURATION_RE = re.compile(
+    r"(?:已?规律|长期|一直|既往|持续)?(?:服用|口服|服药|吃药|使用)\s*\d*[^，,。！？；;\n]{0,8}"
+)
+_NON_CATALOG_STOP_OBJECT_RE = re.compile(
+    r"(?:自行停用|已停用|停用了|停掉了|停用|停服|停掉|停止服用|停止使用)\s*"
+    r"(?!了|的|过|约|近|满|快|已|超|不|\d|半|[一二两三四五六七八九十])([\u4e00-\u9fffA-Za-z]{2,})"
+)
+
+
+def _has_mock_resume_marker(text: str) -> bool:
+    if not text:
+        return False
+    for m in _MOCK_RESUME_DRUG_RE.finditer(text):
+        prefix = text[max(0, m.start() - 6) : m.start()]
+        if _MOCK_NEGATED_RESUME_PREFIX_RE.search(prefix):
+            continue
+        return True
+    return False
+
+
+def _find_mock_stop_marker(snippet: str) -> Optional[str]:
+    """Find cessation verb/colloquialism in Mock Mode while respecting negation, planned stops, and resumption."""
+    if not snippet:
+        return None
+    cleaned = _MOCK_NEGATED_STOP_RE.sub("", snippet)
+    cleaned = _MOCK_PLANNED_STOP_RE.sub("", cleaned)
+
+    best_marker: Optional[str] = None
+    best_pos = -1
+    best_end = -1
+    for marker in _MOCK_STOP_MARKERS:
+        idx = cleaned.rfind(marker)
+        if idx > best_pos or (idx == best_pos and idx != -1 and len(marker) > len(best_marker or "")):
+            best_pos = idx
+            best_end = idx + len(marker)
+            best_marker = marker
+
+    if best_marker is None:
+        return None
+
+    tail = cleaned[best_end:]
+    if _has_mock_resume_marker(tail):
+        return None
+    return best_marker
+
+
+def _parse_mock_stop_duration_days(text_snippet: str) -> Optional[float]:
+    """Parse cessation duration including relative day words (昨日/昨天 -> 1.0, 前天 -> 2.0)."""
+    if not text_snippet:
+        return None
+    days = parse_duration_days(text_snippet)
+    if days is not None:
+        return days
+    if "昨日" in text_snippet or "昨天" in text_snippet:
+        return 1.0
+    if "前天" in text_snippet:
+        return 2.0
+    return None
+
+
+def _strip_active_taking_duration(text_snippet: str) -> str:
+    return _ACTIVE_TAKING_DURATION_RE.sub("", text_snippet or "")
+
 
 def _parse_visit_time_key(visit: Dict[str, Any]) -> Optional[Tuple[int, float]]:
     """Parse block-level temporal semantics into a comparable (tier, value) key (larger = later)."""
@@ -559,8 +664,14 @@ def _detect_key_change(text: str) -> str:
         return "证型/病情转为热痹急性炎性期（禁重灸热敷）"
     if any(k in text for k in ("鞍区麻木", "排尿困难", "尿潴留", "大小便失禁")):
         return "新发马尾神经受压红旗征（推翻前期良性诊断）"
-    if find_stop_drug_marker(text):
-        days = parse_duration_days(text)
+    stop_marker = _find_mock_stop_marker(text)
+    if stop_marker:
+        for clause in re.split(r"[，,。！？；;\n：:]+", text):
+            if _find_mock_stop_marker(clause):
+                days = _parse_mock_stop_duration_days(_strip_active_taking_duration(clause))
+                if days is not None:
+                    return f"停药状态变更（已停约 {days:g} 天）"
+        days = _parse_mock_stop_duration_days(_strip_active_taking_duration(text))
         if days is not None:
             return f"停药状态变更（已停约 {days:g} 天）"
         return "存在停药操作记录"
@@ -640,6 +751,390 @@ def _extract_surgical_history_mock(clean_text: str) -> List[str]:
     return history
 
 
+def _visit_index_for_offset(visits: List[Dict[str, Any]], offset: int) -> int:
+    for idx, visit in enumerate(visits):
+        if visit["start"] <= offset < visit["end"]:
+            return idx
+    return 0
+
+
+def _extract_medications_mock(
+    clean_text: str,
+    visits: List[Dict[str, Any]],
+    unique_drug_keywords: List[str],
+    global_negation_terms: List[str],
+) -> List[Dict[str, Any]]:
+    """Extract medications with cessation status, duration, cross-drug isolation, and anaphoric stop resolution."""
+    historical_markers = ("既往曾服", "既往服用", "既往口服", "曾服", "曾用", "以前服", "吃过", "用过", "服过")
+    current_active_markers = (
+        "仍在用",
+        "现服",
+        "加服",
+        "拟服",
+        "恢复",
+        "重新服用",
+        "重新口服",
+        "续用",
+        "再次服用",
+        "复服",
+        "继续服用",
+        "继续口服",
+        "长期口服",
+        "长期服用",
+        "长期规律口服",
+        "至今未停",
+    )
+    switch_drug_re = re.compile(r"(?:改用|换用|换成|改为|替换为|调整为)")
+
+    drug_events: Dict[str, List[Dict[str, Any]]] = {}
+    valid_drug_mentions: List[Dict[str, Any]] = []
+
+    # Pass 1: Explicit drug mentions and same-clause cessation / negation / resumption
+    for kw in unique_drug_keywords:
+        matches = list(re.finditer(re.escape(kw), clean_text, flags=re.IGNORECASE))
+        if not matches or kw in drug_events:
+            continue
+
+        other_drugs = [
+            od for od in unique_drug_keywords
+            if od.lower() != kw.lower() and od.lower() not in kw.lower() and kw.lower() not in od.lower()
+        ]
+        other_drugs_re = (
+            re.compile("|".join(re.escape(od) for od in sorted(other_drugs, key=len, reverse=True)), flags=re.IGNORECASE)
+            if other_drugs
+            else None
+        )
+
+        mention_states: List[Dict[str, Any]] = []
+        for match in matches:
+            left_win, right_win, full_clause = _extract_clause_windows(
+                clean_text, match.start(), match.end(), pre_window=24, post_window=24
+            )
+            scoped_left = left_win
+            if other_drugs_re:
+                last_other_left = None
+                for om in other_drugs_re.finditer(scoped_left):
+                    last_other_left = om
+                if last_other_left is not None:
+                    scoped_left = scoped_left[last_other_left.end() :]
+            switch_m = None
+            for sm in switch_drug_re.finditer(scoped_left):
+                switch_m = sm
+            if switch_m is not None:
+                scoped_left = scoped_left[switch_m.end() :]
+
+            scoped_right = right_win
+            if other_drugs_re:
+                om_right = other_drugs_re.search(scoped_right)
+                if om_right is not None:
+                    scoped_right = scoped_right[: om_right.start()]
+
+            local_snippet = scoped_left + clean_text[match.start() : match.end()] + scoped_right
+            has_negated_or_planned_stop = bool(
+                _MOCK_NEGATED_STOP_RE.search(local_snippet) or _MOCK_PLANNED_STOP_RE.search(local_snippet)
+            )
+            matched_stop_marker = _find_mock_stop_marker(local_snippet)
+            is_stopped = bool(matched_stop_marker)
+
+            if has_negated_or_planned_stop and not is_stopped:
+                ev = {
+                    "pos": match.start(),
+                    "status": "active",
+                    "stopped_days_ago": None,
+                    "priority": 2,
+                    "explicit_active": True,
+                }
+                mention_states.append(ev)
+                valid_drug_mentions.append(
+                    {
+                        "start": match.start(),
+                        "end": match.end(),
+                        "kw": kw,
+                        "status": "active",
+                        "visit_idx": _visit_index_for_offset(visits, match.start()),
+                    }
+                )
+                continue
+
+            # Check whether the drug was resumed after a stop mention in the same sentence
+            resumed_after_stop = False
+            if is_stopped:
+                sentence_tail = clean_text[match.start() :]
+                sent_end_m = re.search(r"[。！？；;\n]", sentence_tail)
+                sentence_scope = sentence_tail[: sent_end_m.start()] if sent_end_m else sentence_tail
+                if other_drugs_re:
+                    om_sent = other_drugs_re.search(sentence_scope[len(kw) :])
+                    if om_sent is not None:
+                        sentence_scope = sentence_scope[: len(kw) + om_sent.start()]
+                sanitized_stop_snippet = _MOCK_PLANNED_STOP_RE.sub(
+                    "", _MOCK_NEGATED_STOP_RE.sub("", local_snippet)
+                )
+                stop_pos = sanitized_stop_snippet.find(matched_stop_marker) if matched_stop_marker else -1
+                if stop_pos != -1 and _has_mock_resume_marker(sentence_scope):
+                    combined_stop_window = scoped_left + sentence_scope
+                    stop_idx_comb = combined_stop_window.find(matched_stop_marker)
+                    if stop_idx_comb != -1 and _has_mock_resume_marker(
+                        combined_stop_window[stop_idx_comb + len(matched_stop_marker) :]
+                    ):
+                        resumed_after_stop = True
+
+            if resumed_after_stop:
+                ev = {
+                    "pos": match.start(),
+                    "status": "active",
+                    "stopped_days_ago": None,
+                    "priority": 2,
+                    "explicit_active": True,
+                }
+                mention_states.append(ev)
+                valid_drug_mentions.append(
+                    {
+                        "start": match.start(),
+                        "end": match.end(),
+                        "kw": kw,
+                        "status": "active",
+                        "visit_idx": _visit_index_for_offset(visits, match.start()),
+                    }
+                )
+                continue
+
+            stopped_days = None
+            if is_stopped:
+                dur_src = _strip_active_taking_duration(local_snippet)
+                stopped_days = _parse_mock_stop_duration_days(dur_src)
+                if stopped_days is None:
+                    tail = clean_text[match.end() :]
+                    boundary_m = re.search(r"[，,。！？；;\n]", tail)
+                    forward_scope = tail[: boundary_m.start()] if boundary_m else tail
+                    if other_drugs_re:
+                        om_fwd = other_drugs_re.search(forward_scope)
+                        if om_fwd is not None:
+                            forward_scope = forward_scope[: om_fwd.start()]
+                    sw_fwd = switch_drug_re.search(forward_scope)
+                    if sw_fwd is not None:
+                        forward_scope = forward_scope[: sw_fwd.start()]
+                    if not re.search(r"(?:规律服用|仍在服|继续服|恢复服用)", forward_scope):
+                        stopped_days = _parse_mock_stop_duration_days(forward_scope[:32])
+
+                if stopped_days is None and not re.search(r"(?:近期|最近|近日|刚|不知何时)", local_snippet):
+                    sent_tail_m = re.search(r"[。！？；;\n]", clean_text[match.end() :])
+                    sent_tail = (
+                        clean_text[match.end() : match.end() + sent_tail_m.start()]
+                        if sent_tail_m
+                        else clean_text[match.end() :]
+                    )
+                    if other_drugs_re:
+                        om_st = other_drugs_re.search(sent_tail)
+                        if om_st is not None:
+                            sent_tail = sent_tail[: om_st.start()]
+                    sw_st = switch_drug_re.search(sent_tail)
+                    if sw_st is not None:
+                        sent_tail = sent_tail[: sw_st.start()]
+                    for sub_clause in re.split(r"[，,]+", sent_tail):
+                        if _find_mock_stop_marker(sub_clause):
+                            stopped_days = _parse_mock_stop_duration_days(
+                                _strip_active_taking_duration(sub_clause[:48])
+                            )
+                            if stopped_days is not None:
+                                break
+
+                if stopped_days is None and not re.search(r"(?:近期|最近|近日|刚|不知何时)", local_snippet):
+                    v_idx = _visit_index_for_offset(visits, match.start())
+                    hdr = visits[v_idx].get("header") or "" if visits else ""
+                    if hdr and re.search(r"(?:前|半年前|昨日|昨天|前天)", hdr):
+                        stopped_days = _parse_mock_stop_duration_days(hdr)
+
+                ev = {
+                    "pos": match.start(),
+                    "status": "stopped",
+                    "stopped_days_ago": stopped_days,
+                    "priority": 2,
+                    "explicit_active": False,
+                }
+                mention_states.append(ev)
+                valid_drug_mentions.append(
+                    {
+                        "start": match.start(),
+                        "end": match.end(),
+                        "kw": kw,
+                        "status": "stopped",
+                        "visit_idx": _visit_index_for_offset(visits, match.start()),
+                    }
+                )
+                continue
+
+            is_neg, _, _ = check_negation_context(
+                clean_text,
+                match.start(),
+                match.end(),
+                global_negation_terms=global_negation_terms,
+            )
+            if is_neg:
+                continue
+
+            is_historical_only = (
+                any(hm in local_snippet for hm in historical_markers)
+                or ("？" in full_clause and not any(cm in local_snippet for cm in ("一起吃", "同服", "加服", "叠加")))
+            ) and not any(cm in local_snippet for cm in current_active_markers)
+            is_explicit_active = any(cm in local_snippet for cm in current_active_markers)
+            ev_status = "historical" if (is_historical_only and not is_explicit_active) else "active"
+            mention_states.append(
+                {
+                    "pos": match.start(),
+                    "status": ev_status,
+                    "stopped_days_ago": None,
+                    "priority": 0 if ev_status == "historical" else 1,
+                    "explicit_active": is_explicit_active,
+                }
+            )
+            valid_drug_mentions.append(
+                {
+                    "start": match.start(),
+                    "end": match.end(),
+                    "kw": kw,
+                    "status": ev_status,
+                    "visit_idx": _visit_index_for_offset(visits, match.start()),
+                }
+            )
+
+        if mention_states:
+            drug_events[kw] = mention_states
+
+    # Pass 2: Anaphoric / elliptical cessation clauses omitting drug name (e.g., "...氯吡格雷。3天前自行停用。")
+    valid_drug_mentions.sort(key=lambda m: m["start"])
+    all_drugs_re = (
+        re.compile(
+            "|".join(re.escape(d) for d in sorted(unique_drug_keywords, key=len, reverse=True)),
+            flags=re.IGNORECASE,
+        )
+        if unique_drug_keywords
+        else None
+    )
+
+    if valid_drug_mentions and all_drugs_re:
+        for clause_m in re.finditer(r"[^，,。！？；;\n：:]+", clean_text):
+            c_start, c_end = clause_m.start(), clause_m.end()
+            c_text = clause_m.group(0).strip()
+            if not c_text or all_drugs_re.search(c_text):
+                continue
+
+            # Skip interrogative clauses (e.g., "询问是否需要停药？")
+            trailing_punct = clean_text[c_end] if c_end < len(clean_text) else ""
+            if trailing_punct in ("？", "?") or re.search(
+                r"(?:是否|能否|要不要|需要停|需不需要|该不该|吗$)", c_text
+            ):
+                continue
+
+            matched_stop = _find_mock_stop_marker(c_text)
+            if not matched_stop:
+                continue
+
+            sanitized_c_text = _MOCK_PLANNED_STOP_RE.sub("", _MOCK_NEGATED_STOP_RE.sub("", c_text))
+            if _NON_CATALOG_STOP_OBJECT_RE.search(sanitized_c_text):
+                continue
+
+            prior = [m for m in valid_drug_mentions if m["end"] <= c_start]
+            if not prior:
+                continue
+
+            c_visit_idx = _visit_index_for_offset(visits, c_start)
+            last_m = prior[-1]
+            if c_visit_idx - last_m["visit_idx"] > 1:
+                continue
+
+            # Verify the nearest preceding drug-mentioning scope identifies a single unambiguous drug
+            sent_start_bound = max(
+                clean_text.rfind("。", 0, last_m["start"]),
+                clean_text.rfind("！", 0, last_m["start"]),
+                clean_text.rfind("？", 0, last_m["start"]),
+                clean_text.rfind("；", 0, last_m["start"]),
+                clean_text.rfind(";", 0, last_m["start"]),
+                clean_text.rfind("\n", 0, last_m["start"]),
+            ) + 1
+            for sw_m in switch_drug_re.finditer(clean_text, sent_start_bound, last_m["start"]):
+                sent_start_bound = max(sent_start_bound, sw_m.end())
+
+            scope_mentions = [m for m in prior if m["start"] >= sent_start_bound]
+            non_stopped_scope_kws = list(
+                dict.fromkeys(m["kw"] for m in scope_mentions if m["status"] != "stopped")
+            )
+            if len(non_stopped_scope_kws) > 1:
+                continue
+            if len(non_stopped_scope_kws) == 1:
+                target_kw = non_stopped_scope_kws[0]
+            else:
+                scope_kws = list(dict.fromkeys(m["kw"] for m in scope_mentions))
+                if len(scope_kws) != 1:
+                    continue
+                target_kw = scope_kws[0]
+
+            # Check if resumed later in the same sentence before any other drug mention
+            sent_end_m = re.search(r"[。！？；;\n]", clean_text[c_end:])
+            sent_tail = clean_text[c_end : c_end + sent_end_m.start()] if sent_end_m else clean_text[c_end:]
+            om_tail = all_drugs_re.search(sent_tail)
+            if om_tail is not None:
+                sent_tail = sent_tail[: om_tail.start()]
+            if _has_mock_resume_marker(sent_tail):
+                drug_events.setdefault(target_kw, []).append(
+                    {
+                        "pos": c_start,
+                        "status": "active",
+                        "stopped_days_ago": None,
+                        "priority": 2,
+                        "explicit_active": True,
+                    }
+                )
+                continue
+
+            stopped_days = _parse_mock_stop_duration_days(_strip_active_taking_duration(c_text))
+            if stopped_days is None and not re.search(r"(?:近期|最近|近日|刚|不知何时)", c_text):
+                if c_visit_idx > last_m["visit_idx"]:
+                    hdr = visits[c_visit_idx].get("header") or ""
+                    if hdr and re.search(r"(?:前|半年前|昨日|昨天|前天)", hdr):
+                        stopped_days = _parse_mock_stop_duration_days(hdr)
+
+            drug_events.setdefault(target_kw, []).append(
+                {
+                    "pos": c_start,
+                    "status": "stopped",
+                    "stopped_days_ago": stopped_days,
+                    "priority": 2,
+                    "explicit_active": False,
+                }
+            )
+
+    medications: List[Dict[str, Any]] = []
+    for kw in unique_drug_keywords:
+        mention_states = drug_events.get(kw)
+        if not mention_states:
+            continue
+        mention_states = sorted(mention_states, key=lambda m: m["pos"])
+        non_hist = [m for m in mention_states if m["status"] != "historical"]
+        if non_hist:
+            last_stopped_idx = max(
+                (idx for idx, m in enumerate(non_hist) if m["status"] == "stopped"),
+                default=-1,
+            )
+            if last_stopped_idx != -1 and not any(
+                m.get("explicit_active") for m in non_hist[last_stopped_idx + 1 :]
+            ):
+                chosen = non_hist[last_stopped_idx]
+            else:
+                chosen = non_hist[-1]
+        else:
+            chosen = mention_states[-1]
+        final_status = "unknown" if chosen["status"] == "historical" else chosen["status"]
+        medications.append(
+            {
+                "name": kw,
+                "status": final_status,
+                "stopped_days_ago": chosen["stopped_days_ago"],
+            }
+        )
+
+    return medications
+
+
 def _mock_extract_clinical_facts(user_text: str) -> Dict[str, Any]:
     """Deterministically synthesize a realistic structured clinical note extraction in Mock Mode."""
     clean_text = _extract_raw_note_body(user_text)
@@ -714,209 +1209,13 @@ def _mock_extract_clinical_facts(user_text: str) -> Dict[str, Any]:
                 all_drug_keywords.append(kw)
                 drug_washout_map[kw.lower()] = max(drug_washout_map.get(kw.lower(), 0), w_days)
 
-    medications: List[Dict[str, Any]] = []
-    seen_meds = set()
-
-    historical_markers = ("既往曾服", "既往服用", "既往口服", "曾服", "曾用", "以前服", "吃过", "用过", "服过")
-    current_active_markers = ("仍在用", "现服", "加服", "拟服", "恢复", "长期口服", "长期服用", "长期规律口服", "至今未停")
     unique_drug_keywords = list(dict.fromkeys(all_drug_keywords))
-    negated_stop_re = re.compile(
-        r"(?:至今未|并未|尚未|没有|没|不能|不可|不得|切勿|不要|切忌|严禁|禁止|别|莫|勿|未|不)"
-        r"[^，,。！？；;\n]{0,6}?(?:停用|停药|停服|停掉|停止服用|停止使用|已停|停)"
+    medications = _extract_medications_mock(
+        clean_text,
+        visits,
+        unique_drug_keywords,
+        rf_catalog.global_negation_terms,
     )
-    planned_stop_re = re.compile(
-        r"(?:建议|拟|计划|准备|择期|考虑|打算)[^，,。！？；;\n]{0,6}?(?:停用|停药|停服|停掉|停止服用|停止使用)"
-    )
-    switch_drug_re = re.compile(r"(?:改用|换用|换成|改为|替换为|调整为)")
-    resume_drug_re = re.compile(r"(?<!未)(?:恢复|重新|续用|再次服用|复用|继续服用|继续口服|改回)")
-
-    for kw in unique_drug_keywords:
-        matches = list(re.finditer(re.escape(kw), clean_text, flags=re.IGNORECASE))
-        if not matches or kw in seen_meds:
-            continue
-
-        other_drugs = [
-            od for od in unique_drug_keywords
-            if od.lower() != kw.lower() and od.lower() not in kw.lower() and kw.lower() not in od.lower()
-        ]
-        other_drugs_re = (
-            re.compile("|".join(re.escape(od) for od in sorted(other_drugs, key=len, reverse=True)), flags=re.IGNORECASE)
-            if other_drugs
-            else None
-        )
-
-        mention_states: List[Dict[str, Any]] = []
-        for match in matches:
-            left_win, right_win, full_clause = _extract_clause_windows(
-                clean_text, match.start(), match.end(), pre_window=16, post_window=22
-            )
-            scoped_left = left_win
-            if other_drugs_re:
-                last_other_left = None
-                for om in other_drugs_re.finditer(scoped_left):
-                    last_other_left = om
-                if last_other_left is not None:
-                    scoped_left = scoped_left[last_other_left.end() :]
-            switch_m = None
-            for sm in switch_drug_re.finditer(scoped_left):
-                switch_m = sm
-            if switch_m is not None:
-                scoped_left = scoped_left[switch_m.end() :]
-
-            scoped_right = right_win
-            if other_drugs_re:
-                om_right = other_drugs_re.search(scoped_right)
-                if om_right is not None:
-                    scoped_right = scoped_right[: om_right.start()]
-
-            local_snippet = scoped_left + clean_text[match.start() : match.end()] + scoped_right
-            has_negated_or_planned_stop = bool(
-                negated_stop_re.search(local_snippet) or planned_stop_re.search(local_snippet)
-            )
-            sanitized_stop_snippet = planned_stop_re.sub("", negated_stop_re.sub("", local_snippet))
-            matched_stop_marker = find_stop_drug_marker(sanitized_stop_snippet)
-            is_stopped = bool(matched_stop_marker) and not has_negated_or_planned_stop
-
-            if has_negated_or_planned_stop and not is_stopped:
-                mention_states.append(
-                    {"status": "active", "stopped_days_ago": None, "priority": 2, "explicit_active": True}
-                )
-                continue
-
-            # Check whether the drug was resumed after a stop mention in the same sentence
-            resumed_after_stop = False
-            if is_stopped:
-                sentence_tail = clean_text[match.start() :]
-                sent_end_m = re.search(r"[。！？；;\n]", sentence_tail)
-                sentence_scope = sentence_tail[: sent_end_m.start()] if sent_end_m else sentence_tail
-                if other_drugs_re:
-                    om_sent = other_drugs_re.search(sentence_scope[len(kw) :])
-                    if om_sent is not None:
-                        sentence_scope = sentence_scope[: len(kw) + om_sent.start()]
-                stop_pos = sanitized_stop_snippet.find(matched_stop_marker) if matched_stop_marker else -1
-                if stop_pos != -1 and resume_drug_re.search(sentence_scope):
-                    # Verify resume appears after the stop marker in the combined local+sentence window
-                    combined_stop_window = scoped_left + sentence_scope
-                    stop_idx_comb = combined_stop_window.find(matched_stop_marker)
-                    if stop_idx_comb != -1 and resume_drug_re.search(combined_stop_window[stop_idx_comb + len(matched_stop_marker) :]):
-                        resumed_after_stop = True
-
-            if resumed_after_stop:
-                mention_states.append(
-                    {"status": "active", "stopped_days_ago": None, "priority": 2, "explicit_active": True}
-                )
-                continue
-
-            stopped_days = None
-            if is_stopped:
-                # Avoid attributing active-taking duration (e.g. "已规律服用6个月") to cessation
-                dur_src = re.sub(r"(?:已?规律服用|长期服用|已服用|连服|服用)\s*\d*[^，,。！？；;\n]{0,8}", "", local_snippet)
-                stopped_days = parse_duration_days(dur_src)
-                if stopped_days is None:
-                    # Look forward within the same comma-clause, then across commas in the same sentence
-                    tail = clean_text[match.end() :]
-                    boundary_m = re.search(r"[，,。！？；;\n]", tail)
-                    forward_scope = tail[: boundary_m.start()] if boundary_m else tail
-                    if other_drugs_re:
-                        om_fwd = other_drugs_re.search(forward_scope)
-                        if om_fwd is not None:
-                            forward_scope = forward_scope[: om_fwd.start()]
-                    sw_fwd = switch_drug_re.search(forward_scope)
-                    if sw_fwd is not None:
-                        forward_scope = forward_scope[: sw_fwd.start()]
-                    if not re.search(r"(?:规律服用|仍在服|继续服|恢复服用)", forward_scope):
-                        stopped_days = parse_duration_days(forward_scope[:32])
-
-                if stopped_days is None:
-                    sent_tail_m = re.search(r"[。！？；;\n]", clean_text[match.end() :])
-                    sent_tail = (
-                        clean_text[match.end() : match.end() + sent_tail_m.start()]
-                        if sent_tail_m
-                        else clean_text[match.end() :]
-                    )
-                    if other_drugs_re:
-                        om_st = other_drugs_re.search(sent_tail)
-                        if om_st is not None:
-                            sent_tail = sent_tail[: om_st.start()]
-                    sw_st = switch_drug_re.search(sent_tail)
-                    if sw_st is not None:
-                        sent_tail = sent_tail[: sw_st.start()]
-                    if not re.search(r"(?:规律服用|仍在服|继续服|恢复服用)", sent_tail):
-                        stopped_days = parse_duration_days(sent_tail[:48])
-
-                if stopped_days is None:
-                    for visit in visits:
-                        if visit["start"] <= match.start() < visit["end"]:
-                            hdr = visit.get("header") or ""
-                            if hdr and re.search(r"(?:前|半年前)", hdr):
-                                stopped_days = parse_duration_days(hdr)
-                            break
-
-            if is_stopped:
-                mention_states.append(
-                    {"status": "stopped", "stopped_days_ago": stopped_days, "priority": 2, "explicit_active": False}
-                )
-                continue
-
-            is_neg, _, _ = check_negation_context(
-                clean_text,
-                match.start(),
-                match.end(),
-                global_negation_terms=rf_catalog.global_negation_terms,
-            )
-            if is_neg:
-                continue
-
-            is_historical_only = (
-                any(hm in local_snippet for hm in historical_markers)
-                or ("？" in full_clause and not any(cm in local_snippet for cm in ("一起吃", "同服", "加服", "叠加")))
-            ) and not any(
-                cm in local_snippet for cm in ("仍在用", "现服", "加服", "恢复", "长期口服", "长期服用", "长期规律口服", "至今未停")
-            )
-            is_explicit_active = any(cm in local_snippet for cm in current_active_markers)
-            if is_historical_only and not is_explicit_active:
-                mention_states.append(
-                    {"status": "historical", "stopped_days_ago": None, "priority": 0, "explicit_active": False}
-                )
-            else:
-                mention_states.append(
-                    {
-                        "status": "active",
-                        "stopped_days_ago": None,
-                        "priority": 1,
-                        "explicit_active": is_explicit_active,
-                    }
-                )
-
-        if not mention_states:
-            continue
-
-        # Prefer explicit active/stopped over ambiguous historical mention; use latest non-historical state,
-        # but do not let a vague non-explicit mention override an earlier explicit stopped state.
-        non_hist = [m for m in mention_states if m["status"] != "historical"]
-        if non_hist:
-            last_stopped_idx = max(
-                (idx for idx, m in enumerate(non_hist) if m["status"] == "stopped"),
-                default=-1,
-            )
-            if last_stopped_idx != -1 and not any(
-                m.get("explicit_active") for m in non_hist[last_stopped_idx + 1 :]
-            ):
-                chosen = non_hist[last_stopped_idx]
-            else:
-                chosen = non_hist[-1]
-        else:
-            chosen = mention_states[-1]
-        final_status = "unknown" if chosen["status"] == "historical" else chosen["status"]
-
-        seen_meds.add(kw)
-        medications.append(
-            {
-                "name": kw,
-                "status": final_status,
-                "stopped_days_ago": chosen["stopped_days_ago"],
-            }
-        )
 
     # Split medications into active_medications (active/unknown/in-washout) vs stopped_medications (beyond washout)
     active_medications: List[Dict[str, Any]] = []

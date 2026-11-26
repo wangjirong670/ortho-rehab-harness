@@ -20,6 +20,7 @@ from app_copilot.prompts import (
 from app_copilot.streamlit_copilot import (
     collect_unified_alerts,
     evaluate_scale_entries,
+    format_active_medication_stop_display,
     generate_draft_document,
     recalculate_scale_in_state,
     run_copilot_analysis,
@@ -642,3 +643,46 @@ def test_mock_copilot_drafts_not_blocked_across_all_flagged_public_cases(monkeyp
                 assert "针刀" not in active_meds
 
     assert {"ORTHO_LONG_016", "ORTHO_REDFLAG_003", "ORTHO_LONG_013"}.issubset(flagged_checked)
+
+
+def test_copilot_n3_stopped_medication_display_and_unknown_duration_ui(monkeypatch) -> None:
+    """N3: Copilot UI displays exact cessation durations and '已停药，时长未明（按洗脱期内处理）' when duration is None."""
+    monkeypatch.setenv("LLM_MOCK_MODE", "true")
+
+    assert format_active_medication_stop_display({"name": "氯吡格雷", "status": "stopped", "stopped_days_ago": 3.0}) == "3 天（洗脱期内）"
+    assert format_active_medication_stop_display({"name": "氯吡格雷", "status": "stopped", "stopped_days_ago": 7.0}) == "7 天（洗脱期内）"
+    assert format_active_medication_stop_display({"name": "氯吡格雷", "status": "stopped", "stopped_days_ago": 1.0}) == "1 天（洗脱期内）"
+    assert (
+        format_active_medication_stop_display({"name": "氯吡格雷", "status": "stopped", "stopped_days_ago": None})
+        == "已停药，时长未明（按洗脱期内处理）"
+    )
+    assert format_active_medication_stop_display({"name": "利伐沙班", "status": "active", "stopped_days_ago": None}) == "在用 / 未停药"
+
+    # End-to-end copilot pipeline + Streamlit AppTest rendering for unknown cessation duration
+    unknown_dur_note = "长期口服氯吡格雷75mg qd。近期自行停药，今日要求行小针刀。"
+    state = run_copilot_analysis(unknown_dur_note, draft_mode="ward_round", mock_mode=True)
+    active_meds = state["extracted_note"]["current_state_snapshot"]["active_medications"]
+    clopidogrel = next(m for m in active_meds if m["name"] == "氯吡格雷")
+    assert clopidogrel["status"] == "stopped"
+    assert clopidogrel["stopped_days_ago"] is None
+    assert any(a["rule_id"] == "DC_011" for a in state["risk_report"]["alerts"])
+
+    at = AppTest.from_file(APP_PATH, default_timeout=20)
+    at.run()
+    assert not at.exception
+    at.text_area(key="raw_note_input").set_value(unknown_dur_note)
+    at.button(key="run_analysis_btn").click().run()
+    assert not at.exception
+
+    error_texts = "\n".join(el.value for el in at.error)
+    assert "DC_011" in error_texts
+    df_values = "\n".join(df.value.to_string() for df in at.dataframe)
+    assert "已停药，时长未明（按洗脱期内处理）" in df_values
+
+    # Also verify "三天前自己停了" renders "3 天（洗脱期内）" in Tab 1 active_medications table
+    colloquial_note = "【1年前 心内科】长期口服氯吡格雷。\n【3天前 个人记录】三天前自己停了。今日要求行小针刀。"
+    at.text_area(key="raw_note_input").set_value(colloquial_note)
+    at.button(key="run_analysis_btn").click().run()
+    assert not at.exception
+    df_values_colloq = "\n".join(df.value.to_string() for df in at.dataframe)
+    assert "3 天（洗脱期内）" in df_values_colloq

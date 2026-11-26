@@ -400,3 +400,87 @@ def test_mock_clopidogrel_stopped_3_days_and_excludes_invasive_procedures(monkey
     hybrid_report = scan_clinical_risks(raw_text=note_013_full, structured_facts=ext_full["structured_facts"])
     assert any(a["rule_id"] == "DC_011" for a in raw_report["alerts"])
     assert any(a["rule_id"] == "DC_011" for a in hybrid_report["alerts"])
+
+
+@pytest.mark.parametrize(
+    ("note_text", "expected_days"),
+    [
+        ("【1年前 心内科】长期口服氯吡格雷75mg qd。3天前自行停用。今日要求行小针刀。", 3.0),
+        ("【1年前 心内科】长期口服氯吡格雷。\n【3天前 个人记录】三天前自己停了。今日要求行小针刀。", 3.0),
+        ("既往长期口服氯吡格雷，一周前停药，今日要求行小针刀。", 7.0),
+        ("长期口服氯吡格雷，昨日已停用，今日要求行小针刀。", 1.0),
+        ("长期口服氯吡格雷，昨天停的，今日要求行小针刀。", 1.0),
+        ("长期口服氯吡格雷，前天停药，今日要求行小针刀。", 2.0),
+        ("3天前自行停用氯吡格雷。今日要求行小针刀。", 3.0),
+        ("自行停用氯吡格雷3天，今日要求行小针刀。", 3.0),
+        ("长期口服氯吡格雷，近期自行停药，今日要求行小针刀。", None),
+    ],
+)
+def test_mock_n3_stop_phrasing_generalization_and_washout_alerts(
+    monkeypatch, note_text: str, expected_days: float | None
+) -> None:
+    """N3: All 7+ clinical cessation phrasings (anaphoric, pre-verb duration, colloquial, unknown duration) extract status='stopped' and retain DC_011."""
+    monkeypatch.setenv("LLM_MOCK_MODE", "true")
+
+    ext = extract_structured_json(note_text, schema_model=CopilotExtractedNote, mock_mode=True)
+    assert ext["status"] == "ok"
+    data = ext["data"]
+
+    meds = {m["name"]: m for m in data["structured_facts"]["medications"]}
+    assert meds["氯吡格雷"]["status"] == "stopped", f"Expected stopped for: {note_text}"
+    assert meds["氯吡格雷"]["stopped_days_ago"] == expected_days
+
+    active_meds = {m["name"]: m for m in data["current_state_snapshot"]["active_medications"]}
+    assert "氯吡格雷" in active_meds
+    assert active_meds["氯吡格雷"]["status"] == "stopped"
+    assert active_meds["氯吡格雷"]["stopped_days_ago"] == expected_days
+    assert data["current_state_snapshot"]["stopped_medications"] == []
+
+    report = scan_clinical_risks(raw_text=note_text, structured_facts=data["structured_facts"])
+    assert any(a["rule_id"] == "DC_011" for a in report["alerts"]), f"DC_011 missing for: {note_text}"
+
+
+def test_mock_n3_preserves_p03_isolation_negation_and_resume_boundaries(monkeypatch) -> None:
+    """N3 + P0-3 guard: Anaphoric/colloquial stop must NOT break cross-drug isolation, negated stops, planned stops, or resumed drugs."""
+    monkeypatch.setenv("LLM_MOCK_MODE", "true")
+
+    # 1. Cross-drug switch remains strictly isolated
+    note_switch = "华法林已停3月改用利伐沙班抗凝，今日自行加服三七粉。"
+    ext_sw = extract_structured_json(note_switch, schema_model=CopilotExtractedNote, mock_mode=True)["data"]
+    meds_sw = {m["name"]: m for m in ext_sw["structured_facts"]["medications"]}
+    assert meds_sw["华法林"]["status"] == "stopped"
+    assert meds_sw["华法林"]["stopped_days_ago"] == 90.0
+    assert meds_sw["利伐沙班"]["status"] == "active"
+    assert meds_sw["三七"]["status"] == "active"
+
+    # 2. Resumed after stop (including anaphoric stop followed by resume) stays active
+    for resume_note in (
+        "华法林停药10天后已于昨日恢复服用，今日加服三七粉。",
+        "长期口服氯吡格雷。3天前自行停用，昨日已恢复服用，今日要求小针刀。",
+    ):
+        ext_res = extract_structured_json(resume_note, schema_model=CopilotExtractedNote, mock_mode=True)["data"]
+        meds_res = {m["name"]: m for m in ext_res["structured_facts"]["medications"]}
+        for med in meds_res.values():
+            assert med["status"] == "active", f"Resumed drug wrongly stopped in: {resume_note}"
+
+    # 3. Negated / planned / interrogative / non-catalog stops must NOT mark catalog drug stopped
+    for keep_active_note, target_drug in (
+        ("长期口服氯吡格雷，切勿自己停了，千万别停药。", "氯吡格雷"),
+        ("长期口服氯吡格雷，未停药。", "氯吡格雷"),
+        ("长期口服氯吡格雷，建议择期停用。", "氯吡格雷"),
+        ("长期口服氯吡格雷，询问是否需要停药？", "氯吡格雷"),
+        ("长期口服氯吡格雷，3天前自行停用降压药。", "氯吡格雷"),
+        ("长期口服阿司匹林和氯吡格雷，3天前自行停用。", "氯吡格雷"),
+    ):
+        ext_keep = extract_structured_json(keep_active_note, schema_model=CopilotExtractedNote, mock_mode=True)["data"]
+        meds_keep = {m["name"]: m for m in ext_keep["structured_facts"]["medications"]}
+        assert meds_keep[target_drug]["status"] == "active", f"Falsely stopped {target_drug} in: {keep_active_note}"
+
+    # 4. Washout boundary: "前天停的" for warfarin (washout=7) still fires DC_001
+    warfarin_2d = "长期口服华法林，前天停的，今日口服三七粉。"
+    ext_w2 = extract_structured_json(warfarin_2d, schema_model=CopilotExtractedNote, mock_mode=True)["data"]
+    meds_w2 = {m["name"]: m for m in ext_w2["structured_facts"]["medications"]}
+    assert meds_w2["华法林"]["status"] == "stopped"
+    assert meds_w2["华法林"]["stopped_days_ago"] == 2.0
+    rep_w2 = scan_clinical_risks(raw_text=warfarin_2d, structured_facts=ext_w2["structured_facts"])
+    assert any(a["rule_id"] == "DC_001" for a in rep_w2["alerts"])

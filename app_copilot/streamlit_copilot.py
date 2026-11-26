@@ -891,11 +891,7 @@ def _render_tab_structured_note(state: Dict[str, Any]) -> None:
                     {
                         "药物": m.get("name", ""),
                         "状态": m.get("status", ""),
-                        "停药天数": (
-                            f"{m['stopped_days_ago']:g} 天（洗脱期内）"
-                            if m.get("stopped_days_ago") is not None
-                            else ("已停用（天数未明，按洗脱期内处理）" if m.get("status") == "stopped" else "在用 / 未停药")
-                        ),
+                        "停药天数": format_active_medication_stop_display(m),
                     }
                     for m in active_meds
                 ],
@@ -989,6 +985,16 @@ def _render_tab_structured_note(state: Dict[str, Any]) -> None:
             )
         else:
             st.caption("未识别到结构化药物记录。")
+
+
+def format_active_medication_stop_display(med: Dict[str, Any]) -> str:
+    """Format active/in-washout medication cessation duration for Copilot UI display."""
+    stopped_days = med.get("stopped_days_ago")
+    if stopped_days is not None:
+        return f"{stopped_days:g} 天（洗脱期内）"
+    if med.get("status") == "stopped":
+        return "已停药，时长未明（按洗脱期内处理）"
+    return "在用 / 未停药"
 
 
 def _render_scale_manual_inputs(
