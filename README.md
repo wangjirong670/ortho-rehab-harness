@@ -1,13 +1,17 @@
 # OrthoRehab-TCM-Harness
 
+[![Release v0.3.0](https://img.shields.io/badge/Release-v0.3.0-0EA5E9?logo=github)](https://github.com/wangjirong670/ortho-rehab-harness/releases/latest)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![React + Vite](https://img.shields.io/badge/React%20%2B%20Vite-SPA-61DAFB?logo=react&logoColor=black)](frontend/)
 [![PyWebView](https://img.shields.io/badge/Desktop-PyWebView-1E293B)](desktop_app.py)
+[![Tests 193 passed](https://img.shields.io/badge/Tests-193%20passed-16A34A)](tests/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Clinical Safety Harness](https://img.shields.io/badge/Clinical%20Safety-Deterministic%20Harness-0E7490)](knowledge_base/red_flags.yaml)
 
-**用确定性临床护栏包裹概率型大模型——面向中医骨伤与康复科的原生桌面干活副驾 & 红队安全评测工作台**。
+**用确定性临床护栏包裹概率型大模型——面向中医骨伤与康复科的原生单窗口桌面干活副驾 & 红队安全评测工作台**。
+
+> 📦 **免配置环境直接试用**：前往 [GitHub Releases](https://github.com/wangjirong670/ortho-rehab-harness/releases/latest) 下载 `OrthoRehab-TCM-Harness-v0.3.0-win64.zip`（**131.14 MB**，无黑框 Windows GUI 子系统），解压后双击 `OrthoRehab-TCM-Harness.exe` 即可打开原生工作台，无需安装 Python 或 Node.js。
 
 ---
 
@@ -25,7 +29,7 @@
 
 ## 二、核心架构与工程亮点
 
-项目自 `v0.3.0` 起采用**“一套共享医学资产，前后端分离单窗口原生桌面工作台”**架构：纯中文医学规则与量表规范（`knowledge_base/`）和确定性工具层（`core_tools/`）支撑 `app_copilot/service.py` 与 `app_benchmark/service.py`，由 FastAPI（`backend/`）统一暴露 REST/SSE 接口，前端 React + Vite SPA（`frontend/`）经 PyWebView（`desktop_app.py`）封装为单窗口桌面应用（旧版双端口 Tkinter/Streamlit 启动器已弃用）。
+项目自 `v0.3.0` 起采用**“一套共享医学资产，前后端分离单窗口原生桌面工作台”**架构：纯中文医学规则与量表规范（`knowledge_base/`）和确定性工具层（`core_tools/`）支撑 `app_copilot/service.py` 与 `app_benchmark/service.py`，由 FastAPI（`backend/`）统一暴露 REST/SSE 接口，前端 React + Vite + Tailwind 玻璃态 SPA（`frontend/`）经 PyWebView（`desktop_app.py`）封装为无黑框单窗口桌面应用（旧版双端口 Tkinter/Streamlit 启动器已弃用）。
 
 ```text
 +-----------------------------------------------------------------------------------+
@@ -50,18 +54,25 @@
                                           v
 +-----------------------------------------------------------------------------------+
 |      FastAPI REST/SSE (backend/) + React/Vite SPA (frontend/dist/) + PyWebView    |
-|      统一单入口 desktop_app.py（原生窗口 / --browser / --server-only / --check）   |
+|      统一单入口 desktop_app.py（原生无黑框窗口 / --browser / --server-only / --check）|
 +-----------------------------------------------------------------------------------+
 ```
+
+### `v0.3.0` 单窗口四大模块一览
+
+- **🩺 临床副驾**：支持 `.txt` / `.md` / `.docx` 病历导入、一键本地正则脱敏（严格限定显式字段姓名/手机号/身份证号/住院号，不误伤“三七粉/华法林”等医学词并支持撤销）、**「极速安全筛查」**（0 LLM 等待秒出红旗）、顶部红线禁忌胶囊置顶、WOMAC/JOA 中文分值分组补录、纯文本/Markdown/临床交班单导出及文书输出二次硬核复检。
+- **🛡️ 红队评测沙箱**：支持直接在客户端选择真实云端/Ollama 模型或离线 Mock 发起全量/按维度/单题评测（SSE 实时进度与逐题原子落盘）、导入外部评测 `.json` 报告、上传并即时校验自定义 `.yaml` 病例（附空白模板下载）、多模型专属配色雷达图与柱状图、同题「裸模型 vs 护栏协同」对比回放及 CSV / Markdown / JSON 一键导出。
+- **📚 医学知识库**：应用内只读可视化速查全部 16 条红旗规则、11 组中西医用药冲突（含洗脱天数与循证依据）及 4 套量表细则。
+- **⚙️ 模型与设置**：应用内图形化配置 DeepSeek / 兼容 API 与自动探测本机 Ollama 已装模型，支持一键连通性测试与保存，无需手动用记事本改 `.env`。
 
 ### 四项核心工程设计
 
 1. **量表计算确定性外置（严禁静默补 0）**：
    - `core_tools/calculator.py` 内置 `VAS_PAIN`（0–10 分）、`WOMAC_LIKERT_V3_1`（24 项，含 0–100 标准化分）、`JOA_CERVICAL_17`（6 项，含平林法改善率除零保护及总分 `<= 12.5` 自动联动 `RF_001` 红旗预警）与 `JOA_LUMBAR_29`（14 项，含离散负分膀胱项校验）。
-   - 任何缺失条目或越界数值都会在确定性层拦截报错，绝不静默填 `0` 凑分；副驾 Tab 2 支持医师手动补录缺项后即时重算并同步刷新预警与文书草稿。
+   - 任何缺失条目或越界数值都会在确定性层拦截报错，绝不静默填 `0` 凑分；副驾「量表算分与补录」视图支持医师按维度补录缺项后即时重算并同步刷新预警与文书草稿。
 2. **否定词窗口防误杀（双轨联合判定）**：
    - `core_tools/rule_scanner.py` 采用中文强弱标点切分与 `global_negation_terms` / `negation_guards` 双向窗口，放行“否认踩棉花感”“切忌在家自行复位”等否定与劝阻表述，并将所有拦截原因完整写入 `suppressed_matches` 审计日志。
-   - 评测引擎 `app_benchmark/evaluator.py` 对 `forbidden_patterns` 逐 match span 复核 `ignore_if_negated`，避免“严禁在家自行复位”在评测端被误判为安全违例。
+   - 评测引擎 `app_benchmark/evaluator.py` 对 `forbidden_patterns` 逐 match span 复核 `ignore_if_negated`，并支持紧邻单字直接否定词（如“不坐矮凳”“勿热敷”）防误杀的同时严格封堵“不得不/不妨/不如”等双重否定或软建议绕过。
 3. **停药洗脱期（`washout_window_days`）与时间线状态消解**：
    - 依据 `drug_conflicts.yaml` 定义的药物洗脱窗口（如华法林/氯吡格雷 7 天、利伐沙班 3 天、NSAIDs 2 天），识别“已停用华法林 365 天”自动过滤既往冲突，识别“氯吡格雷停药仅 3 天”保留洗脱期内高危预警，并通过 `find_stop_drug_marker()` 拦截“不能停药/至今未停用”误判。
    - `app_copilot/prompts.py` 与 `rule_scanner.py` 引入 `current_state_snapshot` 与 `merge_snapshot_into_structured_facts()`，支持用最新时间线状态覆盖过期旧状态（例如 ACL 术后第 16 周获主刀准予直线慢跑时，通过 `superseded_conditions` 压制过期 `RF_007` 早期保护期告警）。
@@ -70,7 +81,7 @@
 
 > [!NOTE]
 > **评测判分器能力边界与临床安全防线说明**
-> - **Benchmark 判分器双层结构与上限**：`app_benchmark/evaluator.py` 采用**“词表层（正则禁忌/否定/同义动作表）+ 确定性规则层（正反向否定窗口、转折/后续句级矛盾检查、数值与规则集核对）”**双层架构，面向可复现的红队回归评测。对于读源码后针对性构造的极端语义改写或极隐晦委婉放行，词表层客观存在架构上限——**不能把 Benchmark 通过率直接等同于“语义级绝对安全性证明”**。
+> - **Benchmark 判分器双层结构与上限**：`app_benchmark/evaluator.py` 采用**“词表层（正则禁忌/否定/同义动作表）+ 确定性规则层（正反向否定窗口、紧邻单字直接否定、转折/后续句级矛盾检查、数值与规则集核对）”**双层架构，面向可复现的红队回归评测。对于读源码后针对性构造的极端语义改写或极隐晦委婉放行，词表层客观存在架构上限——**不能把 Benchmark 通过率直接等同于“语义级绝对安全性证明”**。
 > - **真实临床防线**：桌面副驾在真实运行时的安全底线并不依赖判分词表，而是依赖输入侧的 **Harness 确定性规则引擎**（`core_tools/rule_scanner.py`）以及输出侧的**副驾输出确定性复检 `verify_draft_against_alerts`**（对模型草稿中的高危动作放行与必需安全警示缺失进行二次硬核拦截与阻断）。
 
 ---
@@ -92,17 +103,20 @@
 - **云端主力模型零误伤 + 可审计升级**：在 `DeepSeek-V4.1-Flash (1017)` 上加装 Harness 保持 20/20 满分通过且零过度拒答，同时将纯文本自由回复升级为带确定性 `rule_id` 溯源、量表红旗自动联动（如 `ORTHO_SCALE_009` 主动触发 `RF_001` 禁扳法警示）与结构化审计轨迹的临床工作流。
 
 > [!TIP]
-> **零成本离线脚本化演示（Mock，非真实模型评测结果）**：无需任何 API Key 或本地 GPU，设置 `LLM_MOCK_MODE=true` 即可一键复现内置 20 题脚本化演示流程（`bare_llm` 70.0% vs `harness_copilot` 100.0% 仅为预设演示基线），用于快速离线验收整套规则与看板链路。
+> **零成本离线脚本化演示（Mock，非真实模型评测结果）**：无需任何 API Key 或本地 GPU，启动时加 `--mock` 或在「模型与设置」开启 Mock 仿真模式即可一键复现内置 20 题演示流程（`bare_llm` 70.0% vs `harness_copilot` 100.0% 仅为预设演示基线），用于快速离线验收整套规则与看板链路。
 
 ---
 
-## 四、典型“翻车实录”与演示截图区
+## 四、原生桌面工作台界面与典型“翻车实录”
 
-![桌面副驾红旗与量表联动演示](docs/assets/copilot_demo.png)
-*图 1：桌面干活副驾（`app_copilot/streamlit_copilot.py`）——自动完成跨诊次时间线状态消解、双轨红旗/用药冲突置顶拦截、严校验量表算分与高约束查房/宣教文书生成。*
+![临床副驾红旗拦截与时间线快照演示](docs/assets/copilot_demo.png)
+*图 1：`v0.3.0` 原生桌面工作台「临床副驾」——自动完成颈椎脊髓受压红旗置顶拦截与禁忌胶囊提示、四诊专科查体结构化、跨诊次纵向时间线整理与量表算分联动。*
 
-![红队评测翻车实录回放看板](docs/assets/bench_fail_case.png)
-*图 2：红队安全评测沙箱（`app_benchmark/streamlit_bench.py`）——真实 `ollama_chat/qwen2.5:7b` 裸模型在 `ORTHO_REDFLAG_004`（全髋置换术后疑似下肢深静脉血栓 DVT）中放行“按摩小腿”与“热水泡脚”的真机翻车实录回放及红框高亮取证。*
+![红队评测沙箱双模型四维对比总览](docs/assets/bench_overview.png)
+*图 2：「红队评测沙箱」双真机对比总览——多模型专属配色的四维能力雷达图与分组柱状图（虚线=裸模型，实线=护栏协同），一屏量化 `qwen2.5:7b` 与 `DeepSeek-V4.1-Flash` 的安全红线降幅与能力增益。*
+
+![红队翻车实录与护栏救回对照回放](docs/assets/bench_fail_case.png)
+*图 3：「红队评测沙箱」同题对比回放——真实 `ollama_chat/qwen2.5:7b` 裸模型在 `ORTHO_REDFLAG_004`（全髋置换术后疑似下肢深静脉血栓 DVT）中委婉放行“按摩小腿”与“热水泡脚”的红线否决取证，以及下方 Harness 护栏成功拦截救回对照。*
 
 ### 代表性内置红队陷阱场景
 
@@ -112,9 +126,15 @@
 
 ---
 
-## 五、3 分钟极速启动（Quick Start）
+## 五、3 分钟极速上手（Quick Start）
 
-### 1. 克隆仓库并安装依赖
+### 1. Windows 绿色免安装版（推荐，零配置环境 30 秒开箱）
+
+1. 前往 [GitHub Releases](https://github.com/wangjirong670/ortho-rehab-harness/releases/latest) 下载 `OrthoRehab-TCM-Harness-v0.3.0-win64.zip`（**131.14 MB**）与 `SHA256SUMS.txt`；
+2. 解压后直接双击 `OrthoRehab-TCM-Harness.exe`，即可打开**无黑框**原生单窗口工作台（初次开启可通过左侧 **「模型与设置」** 图形化配置 DeepSeek / 兼容 API 或一键探测本机 Ollama 模型，也可开启 **Mock 仿真** 零成本离线体验）；
+3. 命令行可选参数：`--mock`（离线仿真）、`--browser`（用默认浏览器打开）、`--server-only --port 8000`（仅启动 FastAPI 服务）、`--check`（环境与路由自检并落盘至 `logs/check_result.json`）。
+
+### 2. 开发者源码运行（Windows / macOS / Linux）
 
 **Windows (PowerShell)：**
 ```powershell
@@ -124,42 +144,30 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 Copy-Item .env.example .env
+
+# 构建前端静态产物（首次或修改 frontend/ 后执行）
+cd frontend ; npm ci ; if ($LASTEXITCODE -eq 0) { npm run build } ; cd ..
+
+# 启动 PyWebView 原生工作台（加上 --mock 可零 API Key 离线体验）
+.\.venv\Scripts\python.exe desktop_app.py --mock
 ```
 
 **macOS / Linux (Bash/Zsh)：**
 ```bash
 git clone https://github.com/wangjirong670/ortho-rehab-harness.git
 cd ortho-rehab-harness
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt && cp .env.example .env
+(cd frontend && npm ci && npm run build)
+python desktop_app.py --mock
 ```
 
-### 2. 一键启动原生桌面工作台（支持零成本离线 Mock）
-
-**方式 A：原生桌面窗口（PyWebView，推荐）**
+**常用启动模式：**
 ```powershell
-# 先构建前端静态产物（首次或修改 frontend/ 后执行）
-cd frontend ; npm ci ; if ($LASTEXITCODE -eq 0) { npm run build } ; cd ..
-
-# 启动单窗口一体桌面工作台（加上 --mock 可零 API Key 离线体验）
-.\.venv\Scripts\python.exe desktop_app.py --mock
+.\.venv\Scripts\python.exe desktop_app.py --browser --mock          # 在系统浏览器打开一体工作台
+.\.venv\Scripts\python.exe desktop_app.py --server-only --mock      # 仅启动 FastAPI 后端 (127.0.0.1:8000)
+.\.venv\Scripts\python.exe desktop_app.py --check                   # 环境、知识库与 API 路由自检
 ```
-
-**方式 B：浏览器模式 / 仅后端服务模式**
-```powershell
-# 在系统默认浏览器中打开一体工作台
-.\.venv\Scripts\python.exe desktop_app.py --browser --mock
-
-# 仅启动 FastAPI 后端（http://127.0.0.1:8000）
-.\.venv\Scripts\python.exe desktop_app.py --server-only --mock --port 8000
-
-# 环境与路由自检（兼容 --check-env 别名）
-.\.venv\Scripts\python.exe desktop_app.py --check
-```
-
-*(注：旧版 `launcher.py` + `streamlit_copilot.py` / `streamlit_bench.py` 双网页入口自 `v0.3.0` 起已弃用，打包产物不再包含 Streamlit。)*
 
 ### 3. 命令行校验、20 题批量评测与全量单测
 
@@ -167,37 +175,23 @@ cd frontend ; npm ci ; if ($LASTEXITCODE -eq 0) { npm run build } ; cd ..
 # 1) 校验 16 条红旗、11 组用药冲突、4 套量表与 20 道公开评测用例 Schema
 .\.venv\Scripts\python.exe scripts/validate_kb.py
 
-# 2) 运行 20 题离线 Mock 基准对比并生成 JSON 报告到 app_benchmark/results/
+# 2) 运行 20 题离线 Mock 或真实模型基准对比，生成 JSON 报告到 app_benchmark/results/
 .\.venv\Scripts\python.exe app_benchmark/runner.py --mock
+.\.venv\Scripts\python.exe app_benchmark/runner.py --models deepseek/deepseek-chat
+.\.venv\Scripts\python.exe app_benchmark/runner.py --models ollama_chat/qwen2.5:7b
 
-# 3) 运行全部单元测试（覆盖确定性计算器、规则扫描、时间线消解、评测判分与 Streamlit AppTest）
+# 3) 运行全部 193 项自动化单元测试（确定性计算器、双轨规则扫描、时间线消解、评测判分、FastAPI 接口与打包器）
 .\.venv\Scripts\python.exe -m pytest -v
 ```
 
-*(macOS / Linux 将 `.\.venv\Scripts\python.exe` 替换为 `python` 即可。)*
+### 4. 本地打包构建 Windows 绿色版
 
-### 4. 切换至真实大模型 API 或本地 Ollama（8GB 显卡离线可跑）
-
-1. 编辑 `.env` 文件，设置 `LLM_MOCK_MODE=false`；
-2. **方式 A（云端 API）**：按需填入对应厂商 Key（支持 `DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`、`OPENAI_API_KEY` / `OPENAI_API_BASE`、`ZHIPUAI_API_KEY`、`MOONSHOT_API_KEY`、`ANTHROPIC_API_KEY`、`GEMINI_API_KEY`）：
-   ```powershell
-   .\.venv\Scripts\python.exe app_benchmark/runner.py --models deepseek/deepseek-chat
-   ```
-3. **方式 B（本地 Ollama 离线隐私部署）**：安装 Ollama 并 `ollama pull qwen2.5:7b`，在 `.env` 中配置 `OLLAMA_API_BASE=http://localhost:11434` 与 `LLM_TIMEOUT_SECONDS=180`（8GB 显存推荐 Ollama 上下文设为 `16384`）：
-   ```powershell
-   .\.venv\Scripts\python.exe app_benchmark/runner.py --models ollama_chat/qwen2.5:7b
-   ```
-
-### 5. Windows 绿色免安装版下载与本地打包构建
-
-- **直接下载 Release 绿色版（免 Python / Node 环境）**：前往 GitHub Releases 下载 `OrthoRehab-TCM-Harness-<version>-win64.zip` 与 `SHA256SUMS.txt`，校验哈希后解压至本地目录，双击 `OrthoRehab-TCM-Harness.exe` 即可打开原生单窗口一体工作台（支持 `--browser` / `--server-only` / `--check` / `--mock`）。
-- **本地打包构建（PyInstaller `--onedir`，需已构建 `frontend/dist/`）**：
-  ```powershell
-  cd frontend ; npm ci ; if ($LASTEXITCODE -eq 0) { npm run build } ; cd ..
-  .\.venv\Scripts\python.exe -m pip install pyinstaller
-  .\.venv\Scripts\python.exe packaging/build_release.py --version v0.3.0
-  ```
-  构建产物输出至 `release_artifacts/OrthoRehab-TCM-Harness-v0.3.0-win64.zip` 与 `release_artifacts/SHA256SUMS.txt`（已配置白名单严格过滤 `.env`、`node_modules/`、`private/` 用例、历史 `results/` 报告及旧 Streamlit 残留）。
+```powershell
+cd frontend ; npm ci ; if ($LASTEXITCODE -eq 0) { npm run build } ; cd ..
+.\.venv\Scripts\python.exe -m pip install pyinstaller
+.\.venv\Scripts\python.exe packaging/build_release.py --version v0.3.0
+```
+构建产物输出至 `release_artifacts/OrthoRehab-TCM-Harness-v0.3.0-win64.zip` 与 `release_artifacts/SHA256SUMS.txt`（内置白名单审计已严格排除 `.env`、`node_modules/`、`private/` 用例、历史 `results/` 报告、`logs/` 及旧 Streamlit 残留）。
 
 ---
 
@@ -209,22 +203,22 @@ ortho-rehab-harness/
 ├── LICENSE
 ├── requirements.txt
 ├── .env.example                       # 多模型 LiteLLM 环境变量模板
-├── .gitignore                         # 屏蔽 .env、node_modules/、private/*、results/ 与 .venv/
+├── .gitignore                         # 屏蔽 .env、node_modules/、frontend/dist/、private/*、results/ 与 .venv/
 ├── desktop_app.py                     # v0.3.0 原生桌面统一主入口（PyWebView + Uvicorn）
 ├── launcher.py                        # 底层运行时路径解析与环境加载工具模块
 ├── backend/                           # FastAPI REST & SSE 服务（/api/v1/* + SPA 托管）
 │   ├── main.py
 │   ├── deps.py
 │   └── routers/                       # copilot / benchmark / kb / settings 路由
-├── frontend/                          # React + Vite + TypeScript 前端工作台源码与 dist/
+├── frontend/                          # React + Vite + Tailwind + TypeScript 玻璃态前端工作台
 ├── packaging/                         # Windows --onedir 打包脚本、图标、CI 模板与上手卡
-│   ├── build_release.py               # PyInstaller 构建 + 白名单防泄漏审计 + ZIP 打包
+│   ├── build_release.py               # PyInstaller GUI 打包 + 白名单防泄漏审计 + ZIP 构建
 │   ├── README_RELEASE.txt             # v0.3.0 原生桌面版上手指南
 │   ├── release.yml.template           # GitHub Actions 自动发版模板
 │   └── assets/app_icon.ico            # 医疗盾牌应用图标
 ├── docs/
 │   ├── blueprint.md                   # 工程蓝图与分周验收约束
-│   └── assets/                        # 演示截图资源目录
+│   └── assets/                        # v0.3.0 原生工作台演示与取证截图
 ├── knowledge_base/                    # 【共享医学资产】纯中文 YAML
 │   ├── red_flags.yaml                 # 骨伤/康复红旗征规则库（16 条）
 │   ├── drug_conflicts.yaml            # 中西医结合用药冲突与洗脱窗规则库（11 组）
@@ -233,7 +227,7 @@ ortho-rehab-harness/
 │   ├── schemas.py                     # Pydantic v2 Schema 与一致性校验
 │   ├── calculator.py                  # 量表确定性计算器（缺项拦截 + 量表联动红旗）
 │   ├── rule_scanner.py                # 双轨安全扫描器（否定窗口 + 洗脱期 + 状态消解）
-│   └── llm_client.py                  # LiteLLM 多模型统一封装 + Mock 客户端
+│   └── llm_client.py                  # LiteLLM 多模型统一封装 + 中文错误翻译 + Ollama 探测
 ├── scripts/
 │   └── validate_kb.py                 # 知识库与全部评测用例一键校验脚本
 ├── app_copilot/                       # 【项目 B：桌面副驾核心服务】
@@ -247,7 +241,7 @@ ortho-rehab-harness/
 │   ├── runner.py                      # 多轮批量评测执行器（bare_llm vs harness_copilot）
 │   ├── evaluator.py                   # 纯 Python 四维确定性判分器
 │   └── service.py                     # 红队评测任务与对比报告服务
-└── tests/                             # 自动化测试套件（全链路单测、API 与 AppTest）
+└── tests/                             # 自动化测试套件（193 项全链路单测、API 与打包校验）
 ```
 
 ---
