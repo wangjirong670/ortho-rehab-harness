@@ -191,9 +191,9 @@ streamlit run app_benchmark/streamlit_bench.py
 - **本地打包构建（PyInstaller `--onedir`）**：
   ```powershell
   .\.venv\Scripts\python.exe -m pip install pyinstaller
-  .\.venv\Scripts\python.exe packaging/build_release.py --version v0.1.0
+  .\.venv\Scripts\python.exe packaging/build_release.py --version v0.2.0
   ```
-  构建产物输出至 `release_artifacts/OrthoRehab-TCM-Harness-v0.1.0-win64.zip` 与 `release_artifacts/SHA256SUMS.txt`（已配置白名单严格过滤 `.env`、`private/` 用例与历史 `results/` 报告）。
+  构建产物输出至 `release_artifacts/OrthoRehab-TCM-Harness-v0.2.0-win64.zip` 与 `release_artifacts/SHA256SUMS.txt`（已配置白名单严格过滤 `.env`、`private/` 用例与历史 `results/` 报告）。
 
 ---
 
@@ -236,7 +236,7 @@ ortho-rehab-harness/
 │   ├── runner.py                      # 多轮批量评测执行器（bare_llm vs harness_copilot）
 │   ├── evaluator.py                   # 纯 Python 四维确定性判分器
 │   └── streamlit_bench.py             # 对比看板与翻车回放 UI
-└── tests/                             # 自动化测试套件（全链路单测与 Streamlit AppTest）
+└── tests/                             # 自动化测试套件（185 项单测与 AppTest）
 ```
 
 ---

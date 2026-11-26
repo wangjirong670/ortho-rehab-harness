@@ -103,8 +103,8 @@ def is_forbidden_bundle_path(rel_posix: str, *, allow_third_party_pem: bool = Fa
     parts = norm.split("/")
     filename = parts[-1]
 
-    # Cache, VCS, virtualenv, build outputs, runtime logs/custom cases
-    forbidden_dirs = {
+    # Cache, VCS, virtualenv anywhere; build outputs & runtime dirs at root
+    always_forbidden_dirs = {
         "__pycache__",
         ".git",
         ".venv",
@@ -112,13 +112,12 @@ def is_forbidden_bundle_path(rel_posix: str, *, allow_third_party_pem: bool = Fa
         ".pytest_cache",
         ".mypy_cache",
         ".ruff_cache",
-        "dist",
-        "build",
-        "release_artifacts",
-        "logs",
-        "custom_cases",
     }
-    if any(part in forbidden_dirs for part in parts):
+    if any(part in always_forbidden_dirs for part in parts):
+        return True
+
+    root_forbidden_dirs = {"dist", "build", "release_artifacts", "logs", "custom_cases"}
+    if parts[0] in root_forbidden_dirs:
         return True
 
     if filename.endswith((".pyc", ".pyo", ".secret", ".key")):
