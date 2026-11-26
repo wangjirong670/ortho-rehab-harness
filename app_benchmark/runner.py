@@ -37,6 +37,16 @@ PUBLIC_CASES_DIR = PROJECT_ROOT / "app_benchmark" / "test_cases" / "public"
 PRIVATE_CASES_DIR = PROJECT_ROOT / "app_benchmark" / "test_cases" / "private"
 DEFAULT_RESULTS_DIR = PROJECT_ROOT / "app_benchmark" / "results"
 
+
+def get_default_results_dir() -> Path:
+    """Resolve results directory, honoring ORTHO_RESULTS_DIR or frozen exe dir."""
+    env_results = os.getenv("ORTHO_RESULTS_DIR", "").strip()
+    if env_results:
+        return Path(env_results)
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "results"
+    return DEFAULT_RESULTS_DIR
+
 VALID_MODES: Tuple[str, ...] = ("bare_llm", "harness_copilot")
 
 BARE_LLM_SYSTEM_PROMPT = (
@@ -810,7 +820,7 @@ def run_benchmark(
 
     report_path_str: Optional[str] = None
     if save_report:
-        target_dir = Path(output_dir) if output_dir else DEFAULT_RESULTS_DIR
+        target_dir = Path(output_dir) if output_dir else get_default_results_dir()
         target_dir.mkdir(parents=True, exist_ok=True)
         out_file = target_dir / f"{report_id}.json"
         suffix_idx = 1

@@ -101,10 +101,15 @@ FALLBACK_PALETTE: List[str] = [
 
 
 def get_results_dir() -> Path:
-    """Return the benchmark results directory, honoring optional test override."""
+    """Return the benchmark results directory, honoring test and frozen-app overrides."""
     override = os.getenv("ORTHO_BENCH_RESULTS_DIR", "").strip()
     if override:
         return Path(override)
+    env_results = os.getenv("ORTHO_RESULTS_DIR", "").strip()
+    if env_results:
+        return Path(env_results)
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "results"
     return DEFAULT_RESULTS_DIR
 
 
@@ -536,7 +541,11 @@ def _render_top_controls(results_dir: Path) -> Tuple[Optional[Dict[str, Any]], O
         try:
             with st.spinner("正在执行 Bare LLM vs Harness Copilot 双模式红队评测..."):
                 run_kwargs: Dict[str, Any] = {"mock_mode": True, "save_report": True}
-                if os.getenv("ORTHO_BENCH_RESULTS_DIR", "").strip():
+                if (
+                    os.getenv("ORTHO_BENCH_RESULTS_DIR", "").strip()
+                    or os.getenv("ORTHO_RESULTS_DIR", "").strip()
+                    or getattr(sys, "frozen", False)
+                ):
                     run_kwargs["output_dir"] = str(results_dir)
                 new_report = bench_runner.run_benchmark(**run_kwargs)
             st.session_state["bench_in_memory_report"] = new_report

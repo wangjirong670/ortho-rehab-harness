@@ -28,6 +28,8 @@ venv/
 .ruff_cache/
 dist/
 build/
+release_artifacts/
+*.spec
 *.egg-info/
 
 # OS & IDE

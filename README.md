@@ -184,6 +184,16 @@ streamlit run app_benchmark/streamlit_bench.py
    .\.venv\Scripts\python.exe app_benchmark/runner.py --models ollama_chat/qwen2.5:7b
    ```
 
+### 5. Windows 绿色免安装版下载与本地打包构建
+
+- **直接下载 Release 绿色版（免 Python 环境）**：前往 GitHub Releases 下载 `OrthoRehab-TCM-Harness-<version>-win64.zip` 与 `SHA256SUMS.txt`，校验哈希后解压至本地目录，双击 `OrthoRehab-TCM-Harness.exe` 打开桌面控制面板即可一键启动副驾（8501）与红队沙箱（8502）；同级无 `.env` 时默认启用离线 Mock 演示模式。
+- **本地打包构建（PyInstaller `--onedir`）**：
+  ```powershell
+  .\.venv\Scripts\python.exe -m pip install pyinstaller
+  .\.venv\Scripts\python.exe packaging/build_release.py --version v0.1.0
+  ```
+  构建产物输出至 `release_artifacts/OrthoRehab-TCM-Harness-v0.1.0-win64.zip` 与 `release_artifacts/SHA256SUMS.txt`（已配置白名单严格过滤 `.env`、`private/` 用例与历史 `results/` 报告）。
+
 ---
 
 ## 六、目录结构总览
@@ -220,7 +230,7 @@ ortho-rehab-harness/
 │   ├── runner.py                      # 多轮批量评测执行器（bare_llm vs harness_copilot）
 │   ├── evaluator.py                   # 纯 Python 四维确定性判分器
 │   └── streamlit_bench.py             # 对比看板与翻车回放 UI
-└── tests/                             # 自动化测试套件（158 项单测与 AppTest）
+└── tests/                             # 自动化测试套件（164 项单测与 AppTest）
 ```
 
 ---

@@ -14,6 +14,7 @@ import json
 import math
 import os
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple, Type, Union
@@ -32,7 +33,19 @@ from core_tools.rule_scanner import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(PROJECT_ROOT / ".env", override=False)
+
+
+def _resolve_env_file() -> Path:
+    """Resolve user-editable .env path (honoring ORTHO_APP_HOME or frozen exe dir)."""
+    app_home = os.getenv("ORTHO_APP_HOME", "").strip()
+    if app_home:
+        return Path(app_home) / ".env"
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / ".env"
+    return PROJECT_ROOT / ".env"
+
+
+load_dotenv(_resolve_env_file(), override=False)
 
 
 _OPENAI_COMPATIBLE_PROVIDERS: FrozenSet[str] = frozenset(
