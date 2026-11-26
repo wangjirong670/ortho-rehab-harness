@@ -1,33 +1,65 @@
 ================================================================================
-OrthoRehab-TCM-Harness Windows 绿色免安装版使用说明
+OrthoRehab-TCM-Harness 临床医生 3 分钟上手卡（Windows 绿色免安装版）
 ================================================================================
 
-一、快速开始（零配置离线演示）
-1. 将本压缩包解压至任意本地英文/中文目录（切勿直接在压缩包预览窗口中双击运行）。
-2. 双击运行 OrthoRehab-TCM-Harness.exe，打开桌面控制面板。
-3. 首次启动且目录中无 .env 文件时，界面会默认勾选「离线 Mock 演示模式」：
-   - 点击「启动骨伤/康复桌面副驾 (8501)」体验病历时间线抽取、红旗预警、量表算分与文书草稿；
-   - 点击「启动红队安全评测沙箱 (8502)」体验 Bare LLM vs Harness 护栏 20 题对比看板。
-4. 关闭桌面控制面板主窗口时，已启动的后台服务会自动清理退出，不会残留进程。
+一、首次启动与 Windows SmartScreen 拦截处理
+1. 请先将压缩包**完整解压**至本地目录（如 D:\OrthoRehab-TCM-Harness\），切勿直接在压缩包
+   预览窗口中双击运行。
+2. 首次双击 OrthoRehab-TCM-Harness.exe 若弹出蓝色「Windows 已保护你的电脑」提示：
+   -> 点击「更多信息」 -> 再点击「仍要运行」即可（开源未购商业代码签名证书属正常现象）。
+3. 首次打开且目录中无 .env 文件时，桌面控制面板会默认勾选「离线 Mock 演示模式」，无需
+   API Key 或联网即可 0 配置体验全流程。
 
-二、切换至真实大模型 API 或本地 Ollama
-1. 在桌面控制面板点击「打开 / 初始化 .env 配置文件」（或手动复制 .env.example 为 .env）。
-2. 将 LLM_MOCK_MODE=false，按需填入 DEEPSEEK_API_KEY / DASHSCOPE_API_KEY /
-   OPENAI_API_KEY 或设置本地 OLLAMA_API_BASE=http://localhost:11434。
-3. 取消勾选界面中的「离线 Mock 演示模式」，重新启动对应工作台即可。
+二、3 步快速体验（推荐首测 3 类临床典型病例）
+1. 点击「🩺 启动骨伤/康复桌面副驾 (8501)」，浏览器自动打开后可在左侧边栏一键填充并试跑：
+   - 病例 A（手法红旗拦截）：颈肩僵硬伴「踩棉花感/扣纽扣不灵」→ 强制阻断颈椎旋转扳法；
+   - 病例 B（跨诊次抗凝冲突）：半年前心内科利伐沙班未停药 + 家属要求加服三七粉/跌打丸/布洛芬；
+   - 病例 C（防过度拒答校准）：ACL 重建术后第 16 周已获主刀准予直线慢跑，不机械沿用早期禁跑旧医嘱。
+2. 点击「🛡️ 启动红队安全评测沙箱 (8502)」，可对比裸模型与 Harness 护栏在 20 题红队陷阱上的差距。
+3. 关闭桌面控制面板主窗口时，已启动的后台服务会自动干净退出。
 
-三、命令行高级用法
-- 环境自检：OrthoRehab-TCM-Harness.exe --check-env
-- 直启副驾：OrthoRehab-TCM-Harness.exe --mode copilot --port 8501 --mock
-- 直启沙箱：OrthoRehab-TCM-Harness.exe --mode benchmark --port 8502 --headless
+三、接入真实大模型（DeepSeek 云端 / 本地 Ollama 隐私部署）
+推荐直接在桌面控制面板点击「⚙️ 模型与连接向导」完成可视化配置、连通性测试与一键保存；
+也可点击「📝 用记事本编辑 .env」手动修改同级目录下的 .env 文件：
+
+  [方式 A：DeepSeek 云端 API]
+  COPILOT_DEFAULT_MODEL=deepseek/deepseek-chat
+  DEEPSEEK_API_KEY=sk-你的密钥
+  LLM_MOCK_MODE=false
+
+  [方式 B：本地 Ollama 离线隐私部署（病历不出内网）]
+  1) 安装 Ollama 后在终端执行：ollama pull qwen2.5:7b
+  2) 在向导中选择「本地 Ollama」（或写入 .env）：
+     COPILOT_DEFAULT_MODEL=ollama_chat/qwen2.5:7b
+     OLLAMA_API_BASE=http://localhost:11434
+     LLM_TIMEOUT_SECONDS=180
+     LLM_MOCK_MODE=false
+  * 注：在界面取消勾选「离线 Mock 演示模式」后重启副驾/沙箱，.env 新配置立即生效。
 
 四、目录说明
-- OrthoRehab-TCM-Harness.exe  主启动器
-- _internal/                  内置运行环境与共享医学规则库（勿随意删改）
-- .env.example                模型配置文件模板（用户自建 .env 保存在 exe 同级目录）
-- results/                    红队评测 JSON 报告自动保存目录
+- OrthoRehab-TCM-Harness.exe  桌面控制面板主程序
+- _internal/                  内置运行环境与共享医学规则库（请勿随意删改）
+- .env.example / .env         模型配置文件模板与用户实际配置（位于 exe 同级）
+- results/                    红队评测 JSON 报告默认保存目录
+- logs/                       副驾与沙箱后台运行日志（copilot.log / benchmark.log）
 
-五、医疗安全与合规边界声明
+五、常见报错与排查 Q&A
+Q1：提示“端口 8501/8502 已被占用”怎么办？
+A：启动器会自动探测并顺延至下一个空闲端口（如 8511/8512），面板状态栏与「打开页面」
+   按钮会自动同步为实际端口，无需手动杀进程。
+
+Q2：点击启动后弹出“服务意外退出”或日志报错？
+A：请查看弹窗中展示的 logs/*.log 末尾 15 行，或点击「🩺 环境自检」确认内置知识库完整；
+   若开启了本地安全软件拦截，请放行本程序访问本地回环地址 127.0.0.1。
+
+Q3：使用 Ollama 提示连接失败或超时？
+A：请确认右下角托盘 Ollama 已启动且已执行 `ollama pull qwen2.5:7b`，并确保 `.env` 中
+   模型名带 `ollama_chat/` 前缀且 `LLM_TIMEOUT_SECONDS=180`。
+
+Q4：修改 `.env` 里的 API Key 后为什么不生效？
+A：请在控制面板「停止」对应服务并重新「启动」，启动器会用最新 `.env` 强制刷新子进程环境。
+
+六、医疗安全与合规边界声明
 - 本软件定位为医学教育、红队安全评测研究与脱敏临床文本辅助整理工具，不接入任何医院
   HIS/EMR 系统，不构成医疗器械，严禁直接面向患者下达医疗诊断或开具处方。
 - 内置知识库规则均需由执业中医骨伤科、康复科或临床药学医师审校核对后使用。

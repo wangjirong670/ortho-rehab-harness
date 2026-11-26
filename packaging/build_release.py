@@ -11,6 +11,7 @@ import hashlib
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import zipfile
@@ -19,6 +20,7 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 
 APP_NAME = "OrthoRehab-TCM-Harness"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+APP_ICON_REL = Path("packaging") / "assets" / "app_icon.ico"
 
 METADATA_PACKAGES: Tuple[str, ...] = (
     "streamlit",
@@ -101,8 +103,21 @@ def is_forbidden_bundle_path(rel_posix: str, *, allow_third_party_pem: bool = Fa
     parts = norm.split("/")
     filename = parts[-1]
 
-    # Cache, VCS, virtualenv, build outputs
-    forbidden_dirs = {"__pycache__", ".git", ".venv", "venv", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build", "release_artifacts"}
+    # Cache, VCS, virtualenv, build outputs, runtime logs/custom cases
+    forbidden_dirs = {
+        "__pycache__",
+        ".git",
+        ".venv",
+        "venv",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        "dist",
+        "build",
+        "release_artifacts",
+        "logs",
+        "custom_cases",
+    }
     if any(part in forbidden_dirs for part in parts):
         return True
 
@@ -167,7 +182,112 @@ def collect_whitelisted_bundle_files(project_root: Path = PROJECT_ROOT) -> List[
     if env_example.is_file():
         _add(env_example, ".")
 
+    icon_file = project_root / APP_ICON_REL
+    if icon_file.is_file():
+        _add(icon_file, "packaging/assets")
+
     return entries
+
+
+def _render_shield_rgba(size: int) -> bytes:
+    """Render a crisp medical shield + white cross RGBA icon bitmap without Pillow."""
+    buf = bytearray(size * size * 4)
+    # Colors (B, G, R, A)
+    teal_dark = (110, 118, 15, 255)   # #0F766E
+    teal_mid = (136, 148, 13, 255)    # #0D9488
+    teal_border = (166, 184, 20, 255) # #14B8A6
+    white = (255, 255, 255, 255)
+    amber = (36, 191, 251, 255)       # #FBBF24 accent bar
+
+    for y in range(size):
+        ny = (y + 0.5) / size
+        # Shield half-width profile by normalized vertical coordinate
+        if ny < 0.10 or ny > 0.92:
+            half_w = -1.0
+        elif ny <= 0.50:
+            half_w = 0.38
+        else:
+            t = (ny - 0.50) / 0.42
+            half_w = 0.38 * max(0.0, 1.0 - t * t)
+
+        for x in range(size):
+            nx = (x + 0.5) / size
+            dx = abs(nx - 0.5)
+            idx = ((size - 1 - y) * size + x) * 4  # bottom-up DIB row order
+
+            if half_w <= 0 or dx > half_w:
+                continue
+
+            # Border detection
+            is_border = (
+                ny < 0.145
+                or dx > half_w - 0.045
+                or (ny > 0.50 and half_w - dx < 0.055)
+            )
+            # Medical cross inside center
+            in_v_arm = dx <= 0.075 and 0.25 <= ny <= 0.67
+            in_h_arm = abs(ny - 0.46) <= 0.075 and dx <= 0.21
+            in_accent = abs(ny - 0.74) <= 0.025 and dx <= 0.10
+
+            if in_v_arm or in_h_arm:
+                color = white
+            elif in_accent and not is_border:
+                color = amber
+            elif is_border:
+                color = teal_border
+            elif nx < 0.5:
+                color = teal_dark
+            else:
+                color = teal_mid
+
+            buf[idx:idx + 4] = bytes(color)
+
+    return bytes(buf)
+
+
+def generate_app_icon(icon_path: Path, sizes: Sequence[int] = (16, 32, 48, 64)) -> Path:
+    """Generate a multi-resolution Windows .ico file using pure Python stdlib."""
+    images: List[Tuple[int, bytes]] = []
+    for sz in sizes:
+        xor_data = _render_shield_rgba(sz)
+        row_bytes = ((sz + 31) // 32) * 4
+        and_data = bytearray(row_bytes * sz)
+        for y_bottom in range(sz):
+            for x in range(sz):
+                alpha = xor_data[(y_bottom * sz + x) * 4 + 3]
+                if alpha < 128:
+                    and_data[y_bottom * row_bytes + (x // 8)] |= 1 << (7 - (x % 8))
+
+        header = struct.pack(
+            "<IIIHHIIIIII",
+            40,
+            sz,
+            sz * 2,
+            1,
+            32,
+            0,
+            len(xor_data) + len(and_data),
+            0,
+            0,
+            0,
+            0,
+        )
+        images.append((sz, header + xor_data + bytes(and_data)))
+
+    count = len(images)
+    ico_dir = struct.pack("<HHH", 0, 1, count)
+    offset = 6 + 16 * count
+    entries = bytearray()
+    payload = bytearray()
+    for sz, dib in images:
+        dim_byte = 0 if sz >= 256 else sz
+        entries += struct.pack("<BBBBHHII", dim_byte, dim_byte, 0, 0, 1, 32, len(dib), offset)
+        payload += dib
+        offset += len(dib)
+
+    icon_path.parent.mkdir(parents=True, exist_ok=True)
+    icon_path.write_bytes(ico_dir + bytes(entries) + bytes(payload))
+    return icon_path
 
 
 def collect_outer_release_files(project_root: Path = PROJECT_ROOT) -> List[Tuple[Path, str]]:
@@ -211,6 +331,7 @@ def generate_pyinstaller_spec(
     project_root: Path = PROJECT_ROOT,
     spec_path: Path,
     bundle_files: Sequence[Tuple[Path, str]],
+    icon_path: Optional[Path] = None,
 ) -> Path:
     """Write a deterministic PyInstaller --onedir .spec file."""
     datas_literal = repr([(str(src), dest) for src, dest in bundle_files])
@@ -219,6 +340,8 @@ def generate_pyinstaller_spec(
     hidden_literal = repr(list(EXPLICIT_HIDDEN_IMPORTS))
     launcher_literal = repr(str(project_root / "launcher.py"))
     pathex_literal = repr([str(project_root)])
+    resolved_icon = icon_path if (icon_path and icon_path.is_file()) else None
+    icon_literal = repr(str(resolved_icon)) if resolved_icon else "None"
 
     spec_content = f"""# -*- mode: python ; coding: utf-8 -*-
 import importlib.metadata as _md
@@ -303,6 +426,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon={icon_literal},
 )
 coll = COLLECT(
     exe,
@@ -384,11 +508,16 @@ def build_release(
     if dist_dir.exists():
         shutil.rmtree(dist_dir)
 
+    icon_path = project_root / APP_ICON_REL
+    if not icon_path.is_file():
+        generate_app_icon(icon_path)
+
     bundle_files = collect_whitelisted_bundle_files(project_root)
     generate_pyinstaller_spec(
         project_root=project_root,
         spec_path=spec_path,
         bundle_files=bundle_files,
+        icon_path=icon_path,
     )
 
     cmd = [

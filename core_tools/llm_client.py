@@ -15,6 +15,7 @@ import math
 import os
 import re
 import sys
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple, Type, Union
@@ -126,6 +127,178 @@ def _sanitize_error_message(message: str) -> str:
         flags=re.IGNORECASE,
     )
     return text
+
+
+def probe_ollama_models(
+    api_base: Optional[str] = None,
+    timeout: float = 1.5,
+) -> List[str]:
+    """Probe local Ollama `/api/tags` endpoint and return `ollama_chat/<model>` names; returns [] on failure."""
+    raw_base = (api_base or os.getenv("OLLAMA_API_BASE") or "http://localhost:11434").strip()
+    if not raw_base:
+        raw_base = "http://localhost:11434"
+    base = raw_base.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3].rstrip("/")
+    url = f"{base}/api/tags"
+
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if getattr(resp, "status", 200) != 200:
+                return []
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return []
+
+    models_raw = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(models_raw, list):
+        return []
+
+    names: List[str] = []
+    seen = set()
+    for entry in models_raw:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or entry.get("model") or "").strip()
+        if not name:
+            continue
+        prefixed = name if name.startswith(("ollama_chat/", "ollama/")) else f"ollama_chat/{name}"
+        if prefixed not in seen:
+            seen.add(prefixed)
+            names.append(prefixed)
+    return names
+
+
+def format_llm_error_zh(raw_message: str, model: str = "") -> Tuple[str, str]:
+    """Translate raw LiteLLM/JSON/network exceptions into actionable Chinese guidance.
+
+    Returns:
+        (chinese_guidance_with_steps, sanitized_raw_error)
+    """
+    sanitized = _sanitize_error_message(raw_message or "未知错误")
+    lower = sanitized.lower()
+    model_str = (model or "").strip()
+    model_lower = model_str.lower()
+    is_ollama = model_lower.startswith(("ollama_chat/", "ollama/")) or "11434" in lower or "ollama" in lower
+
+    # 1. Timeout
+    if any(tok in lower for tok in ("timeout", "timed out", "readtimeout", "apitimeout")):
+        return (
+            "请求模型接口超时。若您使用的是本地 Ollama 或深度推理模型，请在 `.env`（或控制面板「模型与连接向导」）"
+            "中将 `LLM_TIMEOUT_SECONDS` 调大至 `180` 后保存重试。",
+            sanitized,
+        )
+
+    # 2. Ollama connection refused / service not running
+    if is_ollama and any(
+        tok in lower
+        for tok in (
+            "connection refused",
+            "winerror 10061",
+            "failed to establish a new connection",
+            "connectionerror",
+            "apiconnectionerror",
+            "cannot connect",
+            "无法连接",
+        )
+    ):
+        return (
+            "无法连接本地 Ollama 服务（默认地址 `http://localhost:11434`）。\n"
+            "修复步骤：\n"
+            "1. 请确认已启动 Ollama 桌面应用或在终端运行 `ollama serve`；\n"
+            "2. 如更改过端口，请在 `.env` 中核对 `OLLAMA_API_BASE`；\n"
+            "3. 若暂不启用本地模型，可先打开左侧「离线 Mock 模式」。",
+            sanitized,
+        )
+
+    # 3. Ollama local model not pulled (404)
+    if is_ollama and any(
+        tok in lower for tok in ("404", "not found", "notfounderror", "pull", "does not exist", "try pulling")
+    ):
+        short_name = model_str.split("/", 1)[-1] if "/" in model_str else (model_str or "qwen2.5:7b")
+        return (
+            f"本地 Ollama 未找到模型 `{short_name}`（404）。\n"
+            f"修复步骤：请在终端执行 `ollama pull {short_name}` 下载完成后重试，或在左侧边栏切换为已下载的模型。",
+            sanitized,
+        )
+
+    # 4. Authentication / missing or invalid API key
+    if any(
+        tok in lower
+        for tok in (
+            "401",
+            "authenticationerror",
+            "incorrect api key",
+            "invalid api key",
+            "invalid_api_key",
+            "missing api key",
+            "api key not found",
+            "unauthorized",
+            "permissiondenied",
+            "403",
+        )
+    ):
+        return (
+            "API Key 无效、未填写或鉴权失败（401/403）。\n"
+            "修复步骤：\n"
+            "1. 打开控制面板「⚙️ 模型与连接向导」或同级 `.env` 文件，核对对应厂商 Key（如 `DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`、`OPENAI_API_KEY`）；\n"
+            "2. 保存后重新启动或刷新页面；若仅演示体验，可直接开启「离线 Mock 模式」。",
+            sanitized,
+        )
+
+    # 5. Quota / rate limit / insufficient balance
+    if any(
+        tok in lower
+        for tok in ("429", "402", "ratelimit", "rate limit", "insufficient", "quota", "balance", "余额")
+    ):
+        return (
+            "模型接口余额不足或触发请求频率限流（402/429）。请检查账户余额与并发限制、稍后重试，或切换为本地 Ollama / 其他模型。",
+            sanitized,
+        )
+
+    # 6. Structured JSON extraction / Schema validation failure
+    if any(
+        tok in lower
+        for tok in (
+            "json_parse_error",
+            "schema_validation_error",
+            "无法解析为合法 json",
+            "未通过 schema 校验",
+            "jsondecodeerror",
+            "validationerror",
+        )
+    ):
+        return (
+            "模型返回内容未能通过病历结构化 JSON Schema 校验（小参数本地模型偶发输出格式不完整）。\n"
+            "修复建议：可直接点击重新分析重试一次，或切换至指令遵循能力更强的模型（如 `deepseek/deepseek-chat`、`dashscope/qwen-plus`、`ollama_chat/qwen2.5:7b`）。",
+            sanitized,
+        )
+
+    # 7. Cloud model not found (404)
+    if any(tok in lower for tok in ("404", "model_not_found", "notfounderror", "does not exist")):
+        return (
+            f"所选模型 `{model_str or '当前模型'}` 不存在或当前账号无权访问（404）。"
+            "请检查 LiteLLM 模型前缀（例如 `deepseek/deepseek-chat`、`dashscope/qwen-plus`、`openai/gpt-4o-mini`）。",
+            sanitized,
+        )
+
+    # 8. Generic network / endpoint failure
+    if any(
+        tok in lower
+        for tok in ("connection", "apiconnectionerror", "ssl", "proxy", "dns", "name or service not known", "unreachable")
+    ):
+        return (
+            "网络或 API 中转地址连接失败。请检查网络/代理配置，以及 `.env` 中对应的 `API_BASE`（如 `OPENAI_API_BASE`）是否正确。",
+            sanitized,
+        )
+
+    # 9. Generic fallback
+    model_hint = f"（当前模型：`{model_str}`）" if model_str else ""
+    return (
+        f"模型调用失败{model_hint}。请检查 `.env` 配置与模型服务状态，或先开启「离线 Mock 模式」验证业务流程；详情可展开下方技术细节。",
+        sanitized,
+    )
 
 
 def _is_openai_compatible_model(model_name: str) -> bool:

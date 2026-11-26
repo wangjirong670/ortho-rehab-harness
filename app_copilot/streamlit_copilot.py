@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import copy
+import io
 import re
 import sys
+import time
+import xml.etree.ElementTree as ET
+import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -26,8 +31,14 @@ from core_tools.calculator import (
     list_available_scales,
     load_scales_catalog,
 )
-from core_tools.llm_client import LLMClient, LLMConfig
+from core_tools.llm_client import (
+    LLMClient,
+    LLMConfig,
+    format_llm_error_zh,
+    probe_ollama_models,
+)
 from core_tools.rule_scanner import (
+    load_drug_conflicts_catalog,
     load_red_flags_catalog,
     merge_snapshot_into_structured_facts,
     scan_clinical_risks,
@@ -66,6 +77,58 @@ TCM_FIELD_LABELS: Dict[str, str] = {
     "syndrome_pattern": "辨证要点",
 }
 
+CLINICAL_ACTION_ZH: Dict[str, str] = {
+    "STOP_AND_REFER": "立即停诊并转专科评估",
+    "EMERGENCY_REFER": "立即急诊转诊（红线急救）",
+    "STOP_AND_VERIFY_PROTOCOL": "暂停操作并核对手术医师康复方案",
+    "STOP_AND_MODIFY_PLAN": "停止原方案并调整治疗计划",
+    "STOP_AND_VERIFY_MEDS": "暂停叠加并立即核查用药清单",
+    "CAUTION_AND_PROTECT": "高危警示与保护性体位管理",
+    "COMPUTE_WITH_TOOL": "交由确定性量表工具核算",
+    "ALLOW_CONSERVATIVE_GUIDANCE": "红旗阴性，可给予保守护养指导",
+}
+
+POLARITY_ZH: Dict[str, str] = {
+    "present": "阳性",
+    "absent": "阴性",
+    "uncertain": "待明确",
+}
+
+MED_STATUS_ZH: Dict[str, str] = {
+    "active": "在用",
+    "stopped": "已停药",
+    "unknown": "状态待核实",
+}
+
+SOURCE_LABEL_ZH: Dict[str, str] = {
+    "text_scan": "原文规则扫描",
+    "structured_facts": "结构化事实核查",
+    "hybrid": "双轨联合命中",
+    "scale_linkage": "确定性量表阈值联动",
+}
+
+WOMAC_SCORE_LABELS: Dict[int, str] = {
+    0: "0 无",
+    1: "1 轻度",
+    2: "2 中度",
+    3: "3 重度",
+    4: "4 极重",
+}
+
+_PII_NAME_EXCLUSION = frozenset(
+    {"某男", "某女", "男性", "女性", "未知", "匿名", "已脱敏", "待完善", "未提及", "中年", "老年", "青年"}
+)
+_PII_EXPLICIT_NAME_RE = re.compile(
+    r"((?:患者姓名|姓名|病人|患者|联系人|家属)\s*[:：]\s*)([\u4e00-\u9fa5·]{2,4})"
+)
+_PII_PHONE_RE = re.compile(r"(?<!\d)(1[3-9]\d{9})(?!\d)")
+_PII_ID_CARD_RE = re.compile(
+    r"(?<!\d)([1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx])(?!\d)"
+)
+_PII_RECORD_ID_RE = re.compile(
+    r"((?:住院号|病历号|门诊号|就诊卡号|医保号|床号)\s*[:：]\s*)([A-Za-z0-9-]{2,24})"
+)
+
 
 def describe_score_direction(score_direction: Optional[str]) -> str:
     """Return explicit Chinese clinical interpretation of a scale's score direction."""
@@ -88,6 +151,251 @@ def sanitize_error_message(message: Any) -> str:
     )
     text = re.sub(r"([?&](?:api_key|key|token)=)[^&\s]+", r"\1***", text, flags=re.IGNORECASE)
     return text
+
+
+def detect_potential_pii(text: str) -> Dict[str, int]:
+    """Detect high-confidence Chinese PII tokens only in safe explicit contexts (never flagging medical terms)."""
+    src = text or ""
+    name_count = 0
+    for m in _PII_EXPLICIT_NAME_RE.finditer(src):
+        val = m.group(2).strip()
+        if val and not val.startswith("某") and val not in _PII_NAME_EXCLUSION:
+            name_count += 1
+
+    phone_count = len(_PII_PHONE_RE.findall(src))
+    id_count = len(_PII_ID_CARD_RE.findall(src))
+    record_count = len(_PII_RECORD_ID_RE.findall(src))
+    return {
+        "person_name": name_count,
+        "phone": phone_count,
+        "id_card": id_count,
+        "record_id": record_count,
+        "total": name_count + phone_count + id_count + record_count,
+    }
+
+
+def sanitize_clinical_pii(text: str) -> Tuple[str, Dict[str, int]]:
+    """Redact explicit patient names, 11-digit phones, 18-digit IDs, and record IDs without harming medical terms."""
+    src = text or ""
+    counts = {"person_name": 0, "phone": 0, "id_card": 0, "record_id": 0}
+
+    def _replace_name(match: re.Match[str]) -> str:
+        prefix, val = match.group(1), match.group(2).strip()
+        if not val or val.startswith("某") or val in _PII_NAME_EXCLUSION:
+            return match.group(0)
+        counts["person_name"] += 1
+        return f"{prefix}[姓名已脱敏]"
+
+    def _replace_phone(_: re.Match[str]) -> str:
+        counts["phone"] += 1
+        return "[手机号已脱敏]"
+
+    def _replace_id(_: re.Match[str]) -> str:
+        counts["id_card"] += 1
+        return "[身份证号已脱敏]"
+
+    def _replace_record(match: re.Match[str]) -> str:
+        counts["record_id"] += 1
+        return f"{match.group(1)}[编号已脱敏]"
+
+    cleaned = _PII_EXPLICIT_NAME_RE.sub(_replace_name, src)
+    cleaned = _PII_ID_CARD_RE.sub(_replace_id, cleaned)
+    cleaned = _PII_PHONE_RE.sub(_replace_phone, cleaned)
+    cleaned = _PII_RECORD_ID_RE.sub(_replace_record, cleaned)
+    counts["total"] = sum(counts.values())
+    return cleaned, counts
+
+
+def markdown_to_plain_text(md_text: str) -> str:
+    """Strip Markdown formatting into clean plain text suitable for EMR/WeChat/DingTalk pasting."""
+    if not md_text:
+        return ""
+    lines_out: List[str] = []
+    for raw_line in md_text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            lines_out.append("")
+            continue
+        if re.fullmatch(r"[-*_]{3,}", stripped):
+            lines_out.append("----------------------------------------")
+            continue
+        # Strip headings (# ... -> text)
+        line = re.sub(r"^\s{0,3}#{1,6}\s+", "", line)
+        # Strip blockquote marker
+        line = re.sub(r"^\s*>\s?", "", line)
+        # Replace Markdown links [label](url) -> label
+        line = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", line)
+        # Strip inline emphasis and code ticks
+        line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)
+        line = re.sub(r"__([^_]+)__", r"\1", line)
+        line = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"\1", line)
+        line = re.sub(r"`([^`]+)`", r"\1", line)
+        # Normalize bullet prefix
+        line = re.sub(r"^(\s*)[-*]\s+", r"\1• ", line)
+        lines_out.append(line)
+
+    # Collapse >2 consecutive blank lines
+    collapsed = re.sub(r"\n{3,}", "\n\n", "\n".join(lines_out))
+    return collapsed.strip()
+
+
+def build_clinical_handover_text(state: Dict[str, Any]) -> str:
+    """Build a consolidated plain-text handover sheet combining red flags, scale scores, and draft."""
+    lines: List[str] = [
+        "【OrthoRehab 骨伤/康复临床交班摘要（脱敏辅助）】",
+        "",
+        "一、安全红旗与用药冲突摘要",
+    ]
+    alerts = state.get("unified_alerts") or []
+    if not alerts:
+        lines.append("• 安全扫描通过：未检出红旗征或高危中西医用药冲突。")
+    else:
+        for idx, alert in enumerate(alerts, start=1):
+            rid = alert.get("rule_id", "")
+            name = alert.get("name", "")
+            action_zh = CLINICAL_ACTION_ZH.get(str(alert.get("clinical_action", "")), str(alert.get("clinical_action", "")))
+            lines.append(f"{idx}. [{rid}] {name} | 建议动作：{action_zh}")
+            if alert.get("clinical_alert"):
+                lines.append(f"   警示：{alert['clinical_alert']}")
+            if alert.get("contraindicated_actions"):
+                lines.append("   绝对禁忌：" + "；".join(str(x) for x in alert["contraindicated_actions"]))
+
+    lines.extend(["", "二、确定性量表计算结果"])
+    scales = state.get("scale_results") or []
+    if not scales:
+        lines.append("• 暂无量表评估结果。")
+    else:
+        for res in scales:
+            sname = res.get("scale_name") or res.get("scale_id") or ""
+            if res.get("status") == "ok":
+                lines.append(
+                    f"• {sname}：总分 {res.get('total_score')} / {res.get('max_total'):g}（{res.get('severity_band', '')}）"
+                )
+            else:
+                lines.append(f"• {sname}：暂未完成算分（{res.get('message', '')}）")
+
+    lines.extend(["", "三、临床文书草稿（纯文本）"])
+    draft = state.get("draft") or {}
+    if draft.get("blocked"):
+        lines.append("⚠️ 原生成草稿因违背安全约束已被拦截，请先依据上方红旗提示核查。")
+    else:
+        lines.append(markdown_to_plain_text(draft.get("content", "")) or "暂无生成文书。")
+
+    return "\n".join(lines).strip()
+
+
+def extract_text_from_uploaded_file(filename: str, raw_bytes: bytes) -> str:
+    """Extract plain UTF-8 clinical text from .txt, .md, or .docx files using only stdlib."""
+    suffix = Path(filename or "").suffix.lower()
+    if suffix == ".docx":
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
+                xml_bytes = zf.read("word/document.xml")
+        except Exception as exc:
+            raise ValueError(f"无法读取 .docx 文件内容（请确认文件未加密且未损坏）：{exc}") from exc
+
+        root = ET.fromstring(xml_bytes)
+        ns_w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        paragraphs: List[str] = []
+        for p_elem in root.iter(f"{ns_w}p"):
+            chunks = [t.text for t in p_elem.iter(f"{ns_w}t") if t.text]
+            joined = "".join(chunks).strip()
+            if joined:
+                paragraphs.append(joined)
+        return "\n".join(paragraphs).strip()
+
+    for enc in ("utf-8-sig", "utf-8", "gb18030"):
+        try:
+            return raw_bytes.decode(enc).strip()
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("无法识别文件编码，请将病历另存为 UTF-8 编码的 .txt / .md 或 .docx 文件。")
+
+
+def summarize_contraindicated_capsules(unified_alerts: List[Dict[str, Any]]) -> List[str]:
+    """Generate concise prohibited-action capsule tags for compact top-screen rendering."""
+    tags: List[str] = []
+    seen = set()
+
+    def _add(tag: str) -> None:
+        if tag not in seen:
+            seen.add(tag)
+            tags.append(tag)
+
+    for alert in unified_alerts or []:
+        blob = " ".join(
+            [str(alert.get("name", "")), str(alert.get("clinical_alert", ""))]
+            + [str(x) for x in (alert.get("contraindicated_actions") or [])]
+        )
+        if any(k in blob for k in ("旋转扳法", "斜扳", "掰脖子", "暴力正骨", "踩跷")):
+            _add("🚫 旋转扳法/暴力正骨")
+        if any(k in blob for k in ("艾灸", "重灸", "热敷", "烤灯", "热疗")):
+            _add("🚫 艾灸/热敷热疗")
+        if any(k in blob for k in ("三七", "活血", "跌打丸", "NSAIDs", "同服", "叠服", "药酒")):
+            _add("🚫 活血药/止痛药叠加")
+        if any(k in blob for k in ("推拿", "揉捏", "按摩")):
+            _add("🚫 患处推拿揉按")
+        if any(k in blob for k in ("牵引",)):
+            _add("🚫 盲目脊柱牵引")
+        if any(k in blob for k in ("弃拐", "全负重", "跑跳", "开链")):
+            _add("🚫 早期负重/跑跳")
+        if any(k in blob for k in ("屈髋", "矮凳", "翘二郎腿", "内旋")):
+            _add("🚫 屈髋>90°/盘腿内旋")
+        if any(k in blob for k in ("小针刀", "封闭")):
+            _add("🚫 有创小针刀/封闭")
+        if any(k in blob for k in ("急诊", "马尾", "深静脉血栓")):
+            _add("🚑 严禁拖延保守观察")
+
+    return tags[:8]
+
+
+def run_fast_safety_scan(raw_text: str) -> Dict[str, Any]:
+    """Execute zero-LLM Track A deterministic red-flag and drug-conflict screening."""
+    cleaned_text = (raw_text or "").strip()
+    if not cleaned_text:
+        raise ValueError("输入病历文本不能为空。")
+
+    risk_report = scan_clinical_risks(raw_text=cleaned_text)
+    unified_alerts = collect_unified_alerts(risk_report, [])
+    return {
+        "raw_text": cleaned_text,
+        "fast_scan_only": True,
+        "extracted_note": {
+            "patient_summary": "极速安全筛查模式（未调用大模型抽取结构化病历）",
+            "chief_complaint": cleaned_text[:80],
+            "history_of_present_illness": "请点击「🚀 开始分析」获取完整结构化整理、量表算分与文书草稿。",
+            "tcm_four_diagnostics": {},
+            "physical_exam": [],
+            "imaging_summary": "极速筛查模式未执行影像摘要抽取",
+            "timeline_events": [],
+            "structured_facts": {"symptoms": [], "medications": []},
+            "current_state_snapshot": {},
+            "scale_params": [],
+        },
+        "risk_report": risk_report,
+        "scale_results": [],
+        "unified_alerts": unified_alerts,
+        "draft": {
+            "mode": "ward_round",
+            "mode_label": DRAFT_MODE_LABELS["ward_round"],
+            "content": "⚡ 当前为「极速安全筛查」结果，仅运行确定性规则引擎（零 LLM 等待）。如需生成量表算分与文书草稿，请点击上方「🚀 开始分析」。",
+            "blocked": False,
+            "safety_check": {"passed": True, "blocked": False, "violations": []},
+            "model": "deterministic-only",
+            "mock": True,
+            "usage": {},
+        },
+        "draft_mode": "ward_round",
+        "draft_stale": False,
+        "trace": {
+            "extraction_model": "deterministic-only",
+            "extraction_mock": True,
+            "draft_model": "deterministic-only",
+            "draft_mock": True,
+            "draft_usage": {},
+        },
+    }
 
 
 _HIGH_RISK_DRAFT_ACTION_PATTERNS: Tuple[Tuple[str, str], ...] = (
@@ -675,6 +983,30 @@ def recalculate_scale_in_state(
     return new_state
 
 
+def remove_scale_from_state(
+    analysis_state: Dict[str, Any],
+    scale_index: int,
+) -> Dict[str, Any]:
+    """Remove a scale card by index and synchronize unified_alerts + draft_stale flag."""
+    new_state = copy.deepcopy(analysis_state)
+    scale_results = list(new_state.get("scale_results") or [])
+    scale_params = list((new_state.get("extracted_note") or {}).get("scale_params") or [])
+
+    if 0 <= scale_index < len(scale_results):
+        scale_results.pop(scale_index)
+    if 0 <= scale_index < len(scale_params):
+        scale_params.pop(scale_index)
+
+    new_state["scale_results"] = scale_results
+    new_state.setdefault("extracted_note", {})["scale_params"] = scale_params
+    new_state["unified_alerts"] = collect_unified_alerts(
+        new_state.get("risk_report", {}),
+        scale_results,
+    )
+    new_state["draft_stale"] = True
+    return new_state
+
+
 # ==============================================================================
 # Streamlit UI Rendering Helpers
 # ==============================================================================
@@ -694,6 +1026,32 @@ def _clear_workspace() -> None:
     st.session_state["copilot_state"] = None
 
 
+def _record_analysis_history(state: Dict[str, Any], *, label_prefix: str = "") -> None:
+    """Keep the most recent 5 anonymized analysis runs in session state."""
+    history: List[Dict[str, Any]] = list(st.session_state.get("analysis_history") or [])
+    note = state.get("extracted_note") or {}
+    snippet = (
+        str(note.get("chief_complaint") or "").strip()
+        or str(state.get("raw_text") or "").strip()[:32]
+        or "脱敏病历"
+    )[:24]
+    alert_cnt = len(state.get("unified_alerts") or [])
+    ts = datetime.now().strftime("%H:%M:%S")
+    title = f"{label_prefix}{ts} | {snippet} ({alert_cnt}项警示)"
+    entry = {"title": title, "state": copy.deepcopy(state)}
+    history.insert(0, entry)
+    st.session_state["analysis_history"] = history[:5]
+
+
+def _restore_history_entry(index: int) -> None:
+    history = st.session_state.get("analysis_history") or []
+    if 0 <= index < len(history):
+        restored = copy.deepcopy(history[index]["state"])
+        st.session_state["copilot_state"] = restored
+        st.session_state["raw_note_input"] = restored.get("raw_text", "")
+        st.session_state["analysis_run_id"] = st.session_state.get("analysis_run_id", 0) + 1
+
+
 def _render_sidebar(default_config: LLMConfig) -> tuple[str, bool]:
     with st.sidebar:
         st.header("⚙️ 副驾配置与演示数据")
@@ -704,26 +1062,44 @@ def _render_sidebar(default_config: LLMConfig) -> tuple[str, bool]:
         )
 
         st.subheader("模型与运行模式")
+        if "probed_ollama_models" not in st.session_state:
+            st.session_state["probed_ollama_models"] = probe_ollama_models(timeout=0.4)
+
+        col_m1, col_m2 = st.columns([3, 1])
+        with col_m2:
+            if st.button("🔄", key="refresh_ollama_btn", help="刷新本地 Ollama 已安装模型列表"):
+                st.session_state["probed_ollama_models"] = probe_ollama_models(timeout=1.5)
+
+        ollama_models: List[str] = list(st.session_state.get("probed_ollama_models") or [])
+        merged_presets: List[str] = list(PRESET_MODELS)
+        for om in ollama_models:
+            if om not in merged_presets:
+                merged_presets.append(om)
+
         default_model = default_config.default_model
-        model_options = PRESET_MODELS + ["自定义模型..."]
+        model_options = merged_presets + ["自定义模型..."]
         default_idx = (
-            PRESET_MODELS.index(default_model)
-            if default_model in PRESET_MODELS
+            merged_presets.index(default_model)
+            if default_model in merged_presets
             else len(model_options) - 1
         )
-        selected_preset = st.selectbox(
-            "选择 LiteLLM 模型",
-            options=model_options,
-            index=default_idx,
-            key="model_preset_select",
-        )
+        with col_m1:
+            selected_preset = st.selectbox(
+                "选择大模型",
+                options=model_options,
+                index=default_idx,
+                key="model_preset_select",
+            )
+        if ollama_models:
+            st.caption(f"🟢 已探测到本地 Ollama 模型 {len(ollama_models)} 个")
+
         if selected_preset == "自定义模型...":
-            custom_default = default_model if default_model not in PRESET_MODELS else ""
+            custom_default = default_model if default_model not in merged_presets else ""
             chosen_model = (
                 st.text_input(
-                    "自定义 LiteLLM 模型名",
+                    "自定义模型名",
                     value=custom_default,
-                    placeholder="例如: ollama/qwen2.5:14b",
+                    placeholder="例如: ollama_chat/qwen2.5:7b",
                     key="custom_model_input",
                 ).strip()
                 or default_model
@@ -732,7 +1108,7 @@ def _render_sidebar(default_config: LLMConfig) -> tuple[str, bool]:
             chosen_model = selected_preset
 
         mock_mode = st.toggle(
-            "离线 Mock 模式 (LLM_MOCK_MODE)",
+            "离线演示模式（Mock）",
             value=default_config.mock_mode,
             key="mock_mode_toggle",
             help="开启后无需 API Key 即可跑通完整抽取、双轨安全扫描、确定性算分与草稿流程。",
@@ -752,7 +1128,67 @@ def _render_sidebar(default_config: LLMConfig) -> tuple[str, bool]:
                 help=case_info["description"],
             )
 
+        history = st.session_state.get("analysis_history") or []
+        if history:
+            st.divider()
+            st.subheader("🕒 最近分析记录（保留 5 条）")
+            for idx, item in enumerate(history):
+                st.button(
+                    item["title"],
+                    key=f"history_restore_btn_{idx}",
+                    width="stretch",
+                    on_click=_restore_history_entry,
+                    args=(idx,),
+                )
+
     return chosen_model, mock_mode
+
+
+def _render_single_alert_card(alert: Dict[str, Any]) -> None:
+    severity = str(alert.get("severity", "high"))
+    badge = SEVERITY_BADGE_MAP.get(severity, severity.upper())
+    rule_id = alert.get("rule_id", "UNKNOWN")
+    title = alert.get("name", "")
+    raw_source = str(alert.get("source", ""))
+    source_label = alert.get("source_label") or SOURCE_LABEL_ZH.get(raw_source, raw_source)
+    raw_action = str(alert.get("clinical_action", ""))
+    action_zh = CLINICAL_ACTION_ZH.get(raw_action, raw_action)
+
+    review_tags: List[str] = []
+    if alert.get("needs_review"):
+        review_tags.append("⚠️ 需人工复核 (needs_review)")
+    if alert.get("conflict_with_text"):
+        review_tags.append("⚠️ 结构化与原文冲突 (conflict_with_text)")
+    tag_suffix = f" | {' · '.join(review_tags)}" if review_tags else ""
+
+    with st.container(border=True):
+        header_msg = (
+            f"**[{rule_id}] {title}** | 严重度：`{badge}` | 来源：`{source_label}`{tag_suffix}"
+        )
+        if severity in ("critical", "high"):
+            st.error(header_msg)
+        else:
+            st.warning(header_msg)
+        if review_tags:
+            conflict_detail = (
+                alert.get("conflict_detail")
+                or alert.get("review_reason")
+                or "模型结构化事实与病历原文证据存在潜在冲突或边界否定抑制，请临床医师人工核实原文！"
+            )
+            st.warning(f"🔎 **人工复核提示**：{conflict_detail}")
+        evidence = "；".join(str(x) for x in alert.get("matched_evidence") or [])
+        st.markdown(f"- **命中证据**：{evidence or '见结构化事实'}")
+        st.markdown(f"- **建议处置动作**：**{action_zh}**")
+        st.markdown(f"- **临床警示**：{alert.get('clinical_alert', '')}")
+        if alert.get("contraindicated_actions"):
+            contra = "；".join(str(x) for x in alert["contraindicated_actions"])
+            st.markdown(f"- **绝对禁忌操作**：{contra}")
+        if alert.get("suggested_handling"):
+            st.markdown(f"- **处置建议**：{alert['suggested_handling']}")
+        if alert.get("risk_mechanism"):
+            st.markdown(f"- **风险机制**：{alert['risk_mechanism']}")
+        refs = "；".join(str(x) for x in alert.get("reference") or [])
+        st.caption(f"📚 教材 / 指南依据：{refs or '未注明'}")
 
 
 def _render_top_safety_banner(state: Dict[str, Any]) -> None:
@@ -761,7 +1197,11 @@ def _render_top_safety_banner(state: Dict[str, Any]) -> None:
     suppressed = risk_report.get("suppressed_matches") or []
 
     if unified_alerts:
-        has_high_or_critical = any(str(a.get("severity", "high")) in ("critical", "high") for a in unified_alerts)
+        has_high_or_critical = any(
+            str(a.get("severity", "high")) in ("critical", "high") for a in unified_alerts
+        )
+        capsules = summarize_contraindicated_capsules(unified_alerts)
+        capsule_line = "  ".join(f"`{tag}`" for tag in capsules)
         if has_high_or_critical:
             st.error(
                 f"🚨 **高危临床警示**：共触发 **{len(unified_alerts)}** 项红旗 / 用药冲突 / 量表联动告警，"
@@ -772,56 +1212,39 @@ def _render_top_safety_banner(state: Dict[str, Any]) -> None:
                 f"⚠️ **临床安全提示**：共触发 **{len(unified_alerts)}** 项提示级联动约束，"
                 "请留意禁忌操作并动态随访！"
             )
-        for alert in unified_alerts:
-            severity = str(alert.get("severity", "high"))
-            badge = SEVERITY_BADGE_MAP.get(severity, severity.upper())
-            rule_id = alert.get("rule_id", "UNKNOWN")
-            title = alert.get("name", "")
-            review_tags: List[str] = []
-            if alert.get("needs_review"):
-                review_tags.append("⚠️ 需人工复核 (needs_review)")
-            if alert.get("conflict_with_text"):
-                review_tags.append("⚠️ 结构化与原文冲突 (conflict_with_text)")
-            tag_suffix = f" | {' · '.join(review_tags)}" if review_tags else ""
-            with st.container(border=True):
-                header_msg = (
-                    f"**[{rule_id}] {title}** | 严重度：`{badge}` | 来源：`{alert.get('source_label', alert.get('source', ''))}`{tag_suffix}"
-                )
-                if severity in ("critical", "high"):
-                    st.error(header_msg)
-                else:
-                    st.warning(header_msg)
-                if review_tags:
-                    conflict_detail = alert.get("conflict_detail") or alert.get("review_reason") or "模型结构化事实与病历原文证据存在潜在冲突或边界否定抑制，请临床医师人工核实原文！"
-                    st.warning(f"🔎 **人工复核提示**：{conflict_detail}")
-                evidence = "；".join(str(x) for x in alert.get("matched_evidence") or [])
-                st.markdown(f"- **命中证据 (`matched_evidence`)**：{evidence or '见结构化事实'}")
-                st.markdown(f"- **建议动作 (`clinical_action`)**：`{alert.get('clinical_action', '')}`")
-                st.markdown(f"- **临床警示 (`clinical_alert`)**：{alert.get('clinical_alert', '')}")
-                if alert.get("contraindicated_actions"):
-                    contra = "；".join(str(x) for x in alert["contraindicated_actions"])
-                    st.markdown(f"- **绝对禁忌操作**：{contra}")
-                if alert.get("suggested_handling"):
-                    st.markdown(f"- **处置建议**：{alert['suggested_handling']}")
-                if alert.get("risk_mechanism"):
-                    st.markdown(f"- **风险机制**：{alert['risk_mechanism']}")
-                refs = "；".join(str(x) for x in alert.get("reference") or [])
-                st.caption(f"📚 教材 / 指南依据：{refs or '未注明'}")
+        if capsule_line:
+            st.markdown(f"**⚡ 红线禁忌速览**：{capsule_line}")
+
+        if len(unified_alerts) > 2:
+            critical_alerts = [a for a in unified_alerts if str(a.get("severity", "")) == "critical"]
+            other_alerts = [a for a in unified_alerts if str(a.get("severity", "")) != "critical"]
+            for alert in critical_alerts:
+                _render_single_alert_card(alert)
+            if other_alerts:
+                with st.expander(
+                    f"📋 其余 {len(other_alerts)} 项高危/提示级安全约束（点击展开明细）",
+                    expanded=False,
+                ):
+                    for alert in other_alerts:
+                        _render_single_alert_card(alert)
+        else:
+            for alert in unified_alerts:
+                _render_single_alert_card(alert)
     else:
         st.success("✅ **安全扫描通过**：确定性双轨扫描与量表阈值未命中任何红旗征或高危用药冲突。")
 
     with st.expander(
-        f"🛡️ 误报拦截审计记录（否定词与洗脱期过滤 `suppressed_matches`: {len(suppressed)} 条）",
+        f"🛡️ 误报拦截审计记录（否定词与洗脱期过滤：共 {len(suppressed)} 条）",
         expanded=False,
     ):
         if suppressed:
             rows = [
                 {
                     "规则ID": s.get("rule_id", ""),
-                    "类型": s.get("rule_type", ""),
+                    "类型": "红旗征" if s.get("rule_type") == "red_flag" else "用药冲突",
                     "命中词": s.get("term", ""),
                     "拦截原因": s.get("reason", ""),
-                    "来源": s.get("source", ""),
+                    "来源": SOURCE_LABEL_ZH.get(str(s.get("source", "")), str(s.get("source", ""))),
                     "详情": s.get("detail", ""),
                 }
                 for s in suppressed
@@ -859,7 +1282,7 @@ def _render_tab_structured_note(state: Dict[str, Any]) -> None:
             st.caption("暂无专科查体记录。")
 
     st.divider()
-    st.markdown("#### 🕒 跨诊次时间线演变 (`timeline_events`)")
+    st.markdown("#### 🕒 跨诊次时间线演变")
     timeline = note.get("timeline_events") or []
     if timeline:
         for idx, ev in enumerate(timeline, start=1):
@@ -884,14 +1307,14 @@ def _render_tab_structured_note(state: Dict[str, Any]) -> None:
 
     snap_c1, snap_c2 = st.columns(2)
     with snap_c1:
-        st.markdown("**💊 当前在用 / 未满洗脱期药物 (`active_medications`)**")
+        st.markdown("**💊 当前在用 / 未满洗脱期药物**")
         active_meds = snapshot.get("active_medications") or []
         if active_meds:
             st.dataframe(
                 [
                     {
                         "药物": m.get("name", ""),
-                        "状态": m.get("status", ""),
+                        "状态": MED_STATUS_ZH.get(str(m.get("status", "")), str(m.get("status", ""))),
                         "停药天数": format_active_medication_stop_display(m),
                     }
                     for m in active_meds
@@ -903,14 +1326,14 @@ def _render_tab_structured_note(state: Dict[str, Any]) -> None:
             st.caption("当前无高风险在用或洗脱期内药物。")
 
     with snap_c2:
-        st.markdown("**🛑 已停用且超洗脱期药物 (`stopped_medications`)**")
+        st.markdown("**🛑 已停用且超洗脱期药物**")
         stopped_meds = snapshot.get("stopped_medications") or []
         if stopped_meds:
             st.dataframe(
                 [
                     {
                         "药物": m.get("name", ""),
-                        "状态": m.get("status", "stopped"),
+                        "状态": MED_STATUS_ZH.get(str(m.get("status", "stopped")), "已停药"),
                         "已停药天数": (
                             f"{m['stopped_days_ago']:g} 天"
                             if m.get("stopped_days_ago") is not None
@@ -927,19 +1350,19 @@ def _render_tab_structured_note(state: Dict[str, Any]) -> None:
 
     surg_history = snapshot.get("active_surgical_history") or []
     if surg_history:
-        st.markdown("**🦴 长期手术 / 内固定 / 病史约束 (`active_surgical_history`)**")
+        st.markdown("**🦴 长期手术 / 内固定 / 病史约束**")
         for sh in surg_history:
             st.markdown(f"- `{sh}`")
 
     superseded_list = snapshot.get("superseded_conditions") or []
     if superseded_list:
-        st.markdown("**🔄 已被最新诊次推翻 / 已过保护期的旧状态 (`superseded_conditions`)**")
+        st.markdown("**🔄 已被最新诊次推翻 / 已过保护期的旧状态**")
         st.dataframe(
             [
                 {
-                    "过期旧状态 (old_state)": item.get("old_state", ""),
-                    "最新状态 (new_state)": item.get("new_state", ""),
-                    "解除规则提示 (rule_hint)": item.get("rule_hint") or "—",
+                    "过期旧状态": item.get("old_state", ""),
+                    "最新状态": item.get("new_state", ""),
+                    "解除规则提示": item.get("rule_hint") or "—",
                 }
                 for item in superseded_list
             ],
@@ -951,12 +1374,15 @@ def _render_tab_structured_note(state: Dict[str, Any]) -> None:
     facts = note.get("structured_facts") or {}
     c_sym, c_med = st.columns(2)
     with c_sym:
-        st.markdown("#### 结构化症状极性 (`symptoms`)")
+        st.markdown("#### 结构化症状极性")
         syms = facts.get("symptoms") or []
         if syms:
             st.dataframe(
                 [
-                    {"症状/体征": s.get("name", ""), "极性 (polarity)": s.get("polarity", "")}
+                    {
+                        "症状/体征": s.get("name", ""),
+                        "判定状态": POLARITY_ZH.get(str(s.get("polarity", "")), str(s.get("polarity", ""))),
+                    }
                     for s in syms
                 ],
                 width="stretch",
@@ -965,14 +1391,14 @@ def _render_tab_structured_note(state: Dict[str, Any]) -> None:
         else:
             st.caption("未识别到结构化红旗相关症状。")
     with c_med:
-        st.markdown("#### 结构化用药状态 (`medications`)")
+        st.markdown("#### 结构化用药状态")
         meds = facts.get("medications") or []
         if meds:
             st.dataframe(
                 [
                     {
                         "药物/制剂": m.get("name", ""),
-                        "状态 (status)": m.get("status", ""),
+                        "当前状态": MED_STATUS_ZH.get(str(m.get("status", "")), str(m.get("status", ""))),
                         "已停药天数": (
                             f"{m['stopped_days_ago']:g} 天"
                             if m.get("stopped_days_ago") is not None
@@ -998,52 +1424,157 @@ def format_active_medication_stop_display(med: Dict[str, Any]) -> str:
     return "在用 / 未停药"
 
 
+def parse_discrete_score_options(spec: Any, item: Any) -> Optional[Dict[float, str]]:
+    """Build Chinese score option labels for discrete small-range integer scale items."""
+    scale_id = getattr(spec, "scale_id", "")
+    if getattr(item, "allowed_values", None) is not None:
+        mapping: Dict[float, str] = {}
+        parenthetical = re.search(r"[（(]([^（）()]+)[）)]", str(getattr(item, "label", "")))
+        if parenthetical:
+            for part in re.split(r"[，,、;；]+", parenthetical.group(1)):
+                kv = re.match(r"^\s*(-?\d+(?:\.\d+)?)\s*[:=：]\s*(.+?)\s*$", part)
+                if kv:
+                    mapping[float(kv.group(1))] = f"{float(kv.group(1)):g} {kv.group(2).strip()}"
+        for val in item.allowed_values:
+            fv = float(val)
+            mapping.setdefault(fv, f"{fv:g} 分")
+        return mapping
+
+    step = float(getattr(item, "step", None) or 1.0)
+    min_v = float(getattr(item, "min_value", 0.0))
+    max_v = float(getattr(item, "max_value", 0.0))
+    if step != 1.0 or (max_v - min_v) > 4.0:
+        return None
+
+    if scale_id == "WOMAC_LIKERT_V3_1":
+        return {float(k): v for k, v in WOMAC_SCORE_LABELS.items() if min_v <= k <= max_v}
+
+    if scale_id == "JOA_LUMBAR_29":
+        mapping = {}
+        parenthetical = re.search(r"[（(]([^（）()]+)[）)]", str(getattr(item, "label", "")))
+        if parenthetical:
+            for part in re.split(r"[，,、;；]+", parenthetical.group(1)):
+                kv = re.match(r"^\s*(-?\d+(?:\.\d+)?)\s*[:=：]\s*(.+?)\s*$", part)
+                if kv:
+                    mapping[float(kv.group(1))] = f"{float(kv.group(1)):g} {kv.group(2).strip()}"
+        cur = int(min_v)
+        while cur <= int(max_v):
+            mapping.setdefault(float(cur), f"{cur} 分")
+            cur += 1
+        return mapping
+
+    return None
+
+
+def _render_single_scale_item_widget(
+    spec: Any,
+    item: Any,
+    raw_val: Any,
+    item_key: str,
+) -> Optional[float]:
+    score_options = parse_discrete_score_options(spec, item)
+    if score_options is not None:
+        sorted_vals = sorted(score_options.keys())
+        options: List[Optional[float]] = [None] + sorted_vals
+        current = (
+            float(raw_val)
+            if isinstance(raw_val, (int, float)) and not isinstance(raw_val, bool)
+            else None
+        )
+        default_opt_idx = options.index(current) if current in options else 0
+        val = st.selectbox(
+            f"{item.label}",
+            options=options,
+            index=default_opt_idx,
+            format_func=lambda v, m=score_options: "⚠️ 未填写（请补录）" if v is None else m.get(v, f"{v:g} 分"),
+            key=item_key,
+        )
+        return float(val) if val is not None else None
+
+    step = float(item.step or 1.0)
+    min_v = float(item.min_value)
+    max_v = float(item.max_value)
+    default_num: Optional[float] = None
+    if (
+        isinstance(raw_val, (int, float))
+        and not isinstance(raw_val, bool)
+        and min_v <= float(raw_val) <= max_v
+    ):
+        default_num = float(raw_val)
+    fmt = "%d" if step == 1.0 and min_v.is_integer() and max_v.is_integer() else "%.1f"
+    val = st.number_input(
+        f"{item.label}（{min_v:g}~{max_v:g} 分）",
+        min_value=min_v,
+        max_value=max_v,
+        value=default_num,
+        step=step,
+        format=fmt,
+        placeholder="留空表示未填写（严禁默认补0）",
+        key=item_key,
+    )
+    return float(val) if val is not None else None
+
+
 def _render_scale_manual_inputs(
     spec: Any,
     existing_params: Dict[str, Any],
     key_prefix: str,
 ) -> Dict[str, Any]:
-    """Render dynamic manual input widgets for all items of a scale without defaulting missing to 0."""
+    """Render dynamic manual input widgets grouped by subscales without defaulting missing to 0."""
     collected: Dict[str, Any] = {}
-    cols = st.columns(2)
-    for idx, item in enumerate(spec.items):
-        col = cols[idx % 2]
-        raw_val = existing_params.get(item.item_id)
-        item_key = f"{key_prefix}_{item.item_id}"
-        with col:
-            if item.allowed_values is not None:
-                options = [None] + [float(v) for v in item.allowed_values]
-                current = float(raw_val) if isinstance(raw_val, (int, float)) and not isinstance(raw_val, bool) else None
-                default_opt_idx = options.index(current) if current in options else 0
-                val = st.selectbox(
-                    f"{item.label} (`{item.item_id}`)",
-                    options=options,
-                    index=default_opt_idx,
-                    format_func=lambda v: "⚠️ 未填写（请补录）" if v is None else f"{v:g} 分",
-                    key=item_key,
-                )
+    subscales = list(getattr(spec, "subscales", None) or [])
+
+    if subscales:
+        items_by_sub: Dict[str, List[Any]] = {sub.subscale_id: [] for sub in subscales}
+        for item in spec.items:
+            if item.subscale_id in items_by_sub:
+                items_by_sub[item.subscale_id].append(item)
+
+        def _is_filled(it: Any) -> bool:
+            rv = existing_params.get(it.item_id)
+            return isinstance(rv, (int, float)) and not isinstance(rv, bool)
+
+        # Prioritize incomplete subscales at the top
+        ordered_subs = sorted(
+            subscales,
+            key=lambda sub: sum(1 for it in items_by_sub[sub.subscale_id] if not _is_filled(it)) == 0,
+        )
+
+        for sub in ordered_subs:
+            sub_items = items_by_sub[sub.subscale_id]
+            filled_cnt = sum(1 for it in sub_items if _is_filled(it))
+            missing_cnt = len(sub_items) - filled_cnt
+            if missing_cnt > 0:
+                header_label = f"⚠️ {sub.label} — 待补录 {missing_cnt}/{len(sub_items)} 项"
+                expanded = True
             else:
-                step = float(item.step or 1.0)
-                min_v = float(item.min_value)
-                max_v = float(item.max_value)
-                default_num: Optional[float] = None
-                if (
-                    isinstance(raw_val, (int, float))
-                    and not isinstance(raw_val, bool)
-                    and min_v <= float(raw_val) <= max_v
-                ):
-                    default_num = float(raw_val)
-                val = st.number_input(
-                    f"{item.label} (`{item.item_id}` | {min_v:g}~{max_v:g})",
-                    min_value=min_v,
-                    max_value=max_v,
-                    value=default_num,
-                    step=step,
-                    placeholder="留空表示未填写（严禁默认补0）",
-                    key=item_key,
+                header_label = f"✅ {sub.label} — 已填满 {filled_cnt}/{len(sub_items)} 项（点击展开核对）"
+                expanded = False
+
+            with st.expander(header_label, expanded=expanded):
+                cols = st.columns(2)
+                for idx, item in enumerate(sub_items):
+                    with cols[idx % 2]:
+                        val = _render_single_scale_item_widget(
+                            spec,
+                            item,
+                            existing_params.get(item.item_id),
+                            f"{key_prefix}_{item.item_id}",
+                        )
+                        if val is not None:
+                            collected[item.item_id] = val
+    else:
+        cols = st.columns(2)
+        for idx, item in enumerate(spec.items):
+            with cols[idx % 2]:
+                val = _render_single_scale_item_widget(
+                    spec,
+                    item,
+                    existing_params.get(item.item_id),
+                    f"{key_prefix}_{item.item_id}",
                 )
-            if val is not None:
-                collected[item.item_id] = float(val)
+                if val is not None:
+                    collected[item.item_id] = val
 
     if spec.improvement_rate_formula:
         raw_pre = existing_params.get("pre_score")
@@ -1055,11 +1586,12 @@ def _render_scale_manual_inputs(
         ):
             default_pre = float(raw_pre)
         pre_val = st.number_input(
-            f"可选：术前基线总分 (`pre_score` | 用于计算改善率，{spec.min_total:g}~{spec.max_total:g})",
+            f"可选：术前基线总分（用于计算改善率，{spec.min_total:g}~{spec.max_total:g} 分）",
             min_value=float(spec.min_total),
             max_value=float(spec.max_total),
             value=default_pre,
             step=1.0,
+            format="%d",
             placeholder="仅需计算改善率时填写",
             key=f"{key_prefix}_pre_score",
         )
@@ -1100,7 +1632,10 @@ def _render_tab_scales(
                     st.session_state["copilot_state"] = state
                 st.rerun()
             except Exception as exc:
-                st.error(f"刷新文书草稿失败：{sanitize_error_message(exc)}")
+                zh_err, tech_err = format_llm_error_zh(str(exc), model=chosen_model)
+                st.error(f"刷新文书草稿失败：\n\n{zh_err}")
+                with st.expander("🔍 查看技术细节（已脱敏）", expanded=False):
+                    st.code(tech_err, language="text")
 
     if not scale_results:
         st.info("病历文本中未检测到明确量表条目分值，可在下方“手动新增量表评估”选择量表计算。")
@@ -1111,8 +1646,15 @@ def _render_tab_scales(
         direction_text = describe_score_direction(res.get("score_direction"))
 
         with st.container(border=True):
+            hdr_col, rm_col = st.columns([5, 1])
+            with rm_col:
+                if st.button("🗑️ 移除", key=f"remove_scale_{run_id}_{idx}_{scale_id}", width="stretch"):
+                    st.session_state["copilot_state"] = remove_scale_from_state(state, idx)
+                    st.rerun()
+
             if res.get("status") == "ok":
-                st.subheader(f"📊 {res.get('scale_name', scale_id)} (`{scale_id}`)")
+                with hdr_col:
+                    st.subheader(f"📊 {res.get('scale_name', scale_id)} (`{scale_id}`)")
                 m1, m2, m3 = st.columns(3)
                 m1.metric("确定性总分", f"{res.get('total_score')} / {res.get('max_total'):g}")
                 m2.metric("严重程度分级", str(res.get("severity_band", "")))
@@ -1155,18 +1697,49 @@ def _render_tab_scales(
                             res.get("input_params") or res.get("item_scores") or {},
                             key_prefix=f"edit_scale_{run_id}_{idx}_{scale_id}",
                         )
-                        if st.button("重新计算量表", key=f"recalc_ok_{run_id}_{idx}_{scale_id}"):
-                            new_state = recalculate_scale_in_state(
-                                state,
-                                scale_id,
-                                updated_params,
-                                scale_index=idx,
-                                refresh_draft=False,
-                            )
-                            st.session_state["copilot_state"] = new_state
-                            st.rerun()
+                        b_sync, b_only = st.columns(2)
+                        with b_sync:
+                            if st.button(
+                                "🔄 重算并同步刷新文书",
+                                type="primary",
+                                key=f"recalc_sync_ok_{run_id}_{idx}_{scale_id}",
+                                width="stretch",
+                            ):
+                                try:
+                                    new_state = recalculate_scale_in_state(
+                                        state,
+                                        scale_id,
+                                        updated_params,
+                                        scale_index=idx,
+                                        refresh_draft=True,
+                                        model=chosen_model,
+                                        mock_mode=mock_mode,
+                                    )
+                                    st.session_state["copilot_state"] = new_state
+                                    st.rerun()
+                                except Exception as exc:
+                                    zh_err, tech_err = format_llm_error_zh(str(exc), model=chosen_model)
+                                    st.error(f"重算并刷新文书失败：\n\n{zh_err}")
+                                    with st.expander("🔍 查看技术细节（已脱敏）", expanded=False):
+                                        st.code(tech_err, language="text")
+                        with b_only:
+                            if st.button(
+                                "仅重算量表",
+                                key=f"recalc_ok_{run_id}_{idx}_{scale_id}",
+                                width="stretch",
+                            ):
+                                new_state = recalculate_scale_in_state(
+                                    state,
+                                    scale_id,
+                                    updated_params,
+                                    scale_index=idx,
+                                    refresh_draft=False,
+                                )
+                                st.session_state["copilot_state"] = new_state
+                                st.rerun()
             else:
-                st.subheader(f"⚠️ {res.get('scale_name', scale_id)} (`{scale_id}`) — 待补录或修正")
+                with hdr_col:
+                    st.subheader(f"⚠️ {res.get('scale_name', scale_id)} (`{scale_id}`) — 待补录或修正")
                 st.caption(f"🧭 **风险方向说明**：{direction_text}")
                 missing = res.get("missing_fields") or []
                 invalid = res.get("invalid_fields") or []
@@ -1175,10 +1748,12 @@ def _render_tab_scales(
                 ]
                 if missing and spec is not None:
                     label_map = {it.item_id: it.label for it in spec.items}
-                    missing_desc = "、".join(f"`{fid}` ({label_map.get(fid, fid)})" for fid in missing)
+                    missing_desc = "、".join(f"{label_map.get(fid, fid)}" for fid in missing[:8])
+                    if len(missing) > 8:
+                        missing_desc += f" 等共 {len(missing)} 项"
                     warn_lines.append(f"- **缺失必填字段 ({len(missing)} 项)**：{missing_desc}")
                 if invalid:
-                    invalid_desc = "；".join(f"`{f.get('field')}`: {f.get('reason')}" for f in invalid)
+                    invalid_desc = "；".join(f"{f.get('field')}: {f.get('reason')}" for f in invalid)
                     warn_lines.append(f"- **越界或非法字段 ({len(invalid)} 项)**：{invalid_desc}")
                 st.warning("\n".join(warn_lines))
 
@@ -1189,20 +1764,46 @@ def _render_tab_scales(
                         res.get("input_params") or {},
                         key_prefix=f"fix_scale_{run_id}_{idx}_{scale_id}",
                     )
-                    if st.button(
-                        "重新计算量表",
-                        type="primary",
-                        key=f"recalc_err_{run_id}_{idx}_{scale_id}",
-                    ):
-                        new_state = recalculate_scale_in_state(
-                            state,
-                            scale_id,
-                            updated_params,
-                            scale_index=idx,
-                            refresh_draft=False,
-                        )
-                        st.session_state["copilot_state"] = new_state
-                        st.rerun()
+                    b_only, b_sync = st.columns(2)
+                    with b_only:
+                        if st.button(
+                            "仅重算量表",
+                            type="primary",
+                            key=f"recalc_err_{run_id}_{idx}_{scale_id}",
+                            width="stretch",
+                        ):
+                            new_state = recalculate_scale_in_state(
+                                state,
+                                scale_id,
+                                updated_params,
+                                scale_index=idx,
+                                refresh_draft=False,
+                            )
+                            st.session_state["copilot_state"] = new_state
+                            st.rerun()
+                    with b_sync:
+                        if st.button(
+                            "🔄 重算并同步刷新文书",
+                            key=f"recalc_sync_err_{run_id}_{idx}_{scale_id}",
+                            width="stretch",
+                        ):
+                            try:
+                                new_state = recalculate_scale_in_state(
+                                    state,
+                                    scale_id,
+                                    updated_params,
+                                    scale_index=idx,
+                                    refresh_draft=True,
+                                    model=chosen_model,
+                                    mock_mode=mock_mode,
+                                )
+                                st.session_state["copilot_state"] = new_state
+                                st.rerun()
+                            except Exception as exc:
+                                zh_err, tech_err = format_llm_error_zh(str(exc), model=chosen_model)
+                                st.error(f"重算并刷新文书失败：\n\n{zh_err}")
+                                with st.expander("🔍 查看技术细节（已脱敏）", expanded=False):
+                                    st.code(tech_err, language="text")
 
     st.divider()
     with st.expander("➕ 手动新增量表评估（4 套标准骨伤/康复量表）", expanded=not bool(scale_results)):
@@ -1214,8 +1815,15 @@ def _render_tab_scales(
             format_func=lambda sid: scale_labels.get(sid, sid),
             key=f"add_scale_select_{run_id}",
         )
+        existing_ids = {r.get("scale_id") for r in scale_results}
+        already_exists = chosen_add_id in existing_ids
+        if already_exists:
+            st.warning(
+                f"⚠️ 上方已存在 **{scale_labels.get(chosen_add_id, chosen_add_id)}** 的评估卡片，"
+                "请直接在对应卡片中修改并重算（或先点击卡片右上角「🗑️ 移除」后再重新添加）。"
+            )
         add_spec = spec_map.get(chosen_add_id)
-        if add_spec is not None:
+        if add_spec is not None and not already_exists:
             st.caption(
                 f"🧭 **风险方向说明**：{describe_score_direction('higher_is_worse' if add_spec.direction == 'higher_is_worse' else 'lower_is_worse')} | {add_spec.version_note}"
             )
@@ -1285,10 +1893,13 @@ def _render_tab_draft(
                 st.session_state["copilot_state"] = state
                 current_draft = new_draft
         except Exception as exc:
-            st.error(f"文书草稿生成失败：{sanitize_error_message(exc)}")
+            zh_err, tech_err = format_llm_error_zh(str(exc), model=chosen_model)
+            st.error(f"文书草稿生成失败：\n\n{zh_err}")
+            with st.expander("🔍 查看技术细节（已脱敏）", expanded=False):
+                st.code(tech_err, language="text")
 
     if state.get("draft_stale"):
-        st.warning("⚠️ 量表结果已更新，当前草稿仍基于更新前的数据，请点击上方按钮刷新。")
+        st.warning("⚠️ 量表结果已更新，当前草稿仍基于更新前的数据，请点击 Tab 2 同步按钮或上方重新生成。")
 
     draft_content = current_draft.get("content", "")
     st.caption(
@@ -1311,13 +1922,59 @@ def _render_tab_draft(
     with st.container(border=True):
         st.markdown(draft_content)
 
-    st.markdown("#### 📋 Markdown 源码（点击右上角一键复制）")
-    st.code(draft_content, language="markdown")
+    plain_text_draft = markdown_to_plain_text(draft_content)
+    handover_text = build_clinical_handover_text(state)
+
+    st.markdown("#### 📋 一键复制与文件导出")
+    copy_mode = st.radio(
+        "选择复制格式",
+        options=["plain", "markdown"],
+        format_func=lambda x: (
+            "📋 纯文本版（去 Markdown 符号，适合直接粘进医院病历 / 微信 / 钉钉）"
+            if x == "plain"
+            else "📝 Markdown 原文版"
+        ),
+        horizontal=True,
+        key=f"draft_copy_mode_{run_id}",
+    )
+    if copy_mode == "plain":
+        st.code(plain_text_draft, language=None)
+    else:
+        st.code(draft_content, language="markdown")
+
+    dl_c1, dl_c2, dl_c3 = st.columns(3)
+    with dl_c1:
+        st.download_button(
+            "⬇️ 导出纯文本 (.txt)",
+            data=plain_text_draft.encode("utf-8"),
+            file_name=f"ortho_draft_{current_mode}.txt",
+            mime="text/plain",
+            width="stretch",
+            key=f"dl_txt_{run_id}",
+        )
+    with dl_c2:
+        st.download_button(
+            "⬇️ 导出 Markdown (.md)",
+            data=draft_content.encode("utf-8"),
+            file_name=f"ortho_draft_{current_mode}.md",
+            mime="text/markdown",
+            width="stretch",
+            key=f"dl_md_{run_id}",
+        )
+    with dl_c3:
+        st.download_button(
+            "⬇️ 导出合并临床交班单 (.txt)",
+            data=handover_text.encode("utf-8"),
+            file_name="ortho_clinical_handover.txt",
+            mime="text/plain",
+            width="stretch",
+            key=f"dl_handover_{run_id}",
+        )
 
 
 def _render_tab_trace(state: Dict[str, Any]) -> None:
     trace = state.get("trace") or {}
-    st.markdown("#### 模型与运行元信息")
+    st.markdown("#### 模型与运行元信息（工程调试审计）")
     st.json(
         {
             "extraction_model": trace.get("extraction_model"),
@@ -1328,6 +1985,7 @@ def _render_tab_trace(state: Dict[str, Any]) -> None:
             "risk_summary": (state.get("risk_report") or {}).get("summary"),
             "unified_alert_count": len(state.get("unified_alerts") or []),
             "scale_count": len(state.get("scale_results") or []),
+            "fast_scan_only": bool(state.get("fast_scan_only")),
         }
     )
 
@@ -1339,6 +1997,102 @@ def _render_tab_trace(state: Dict[str, Any]) -> None:
 
     with st.expander("3️⃣ 确定性量表计算结果 JSON (`scale_results`)", expanded=False):
         st.json(state.get("scale_results") or [])
+
+
+def _render_tab_kb_reference() -> None:
+    """Render read-only Chinese knowledge base quick reference for clinicians."""
+    rf_catalog = load_red_flags_catalog()
+    dc_catalog = load_drug_conflicts_catalog()
+    scales_catalog = load_scales_catalog()
+
+    st.caption("以下规则与量表均实时读取自 `knowledge_base/*.yaml`（只读速查，所有临床决策须由执业医师复核）。")
+    sub_rf, sub_dc, sub_sc = st.tabs(
+        [
+            f"🚨 红旗规则库（{len(rf_catalog.rules)} 条）",
+            f"💊 用药冲突与洗脱窗（{len(dc_catalog.conflicts)} 组）",
+            f"📏 骨伤康复量表（{len(scales_catalog.scales)} 套）",
+        ]
+    )
+
+    with sub_rf:
+        rf_rows = [
+            {
+                "规则编号": r.rule_id,
+                "红旗名称": r.name,
+                "分类": r.category,
+                "严重度": SEVERITY_BADGE_MAP.get(r.severity, r.severity),
+                "触发核心词": "、".join(r.trigger_symptoms.required_any[:6]),
+                "绝对禁忌操作": "；".join(r.contraindicated_actions),
+                "建议动作": CLINICAL_ACTION_ZH.get(r.recommended_action, r.recommended_action),
+                "指南依据": "；".join(r.references),
+            }
+            for r in rf_catalog.rules
+        ]
+        st.dataframe(rf_rows, width="stretch", hide_index=True)
+
+    with sub_dc:
+        dc_rows = [
+            {
+                "冲突编号": c.conflict_id,
+                "冲突组合": c.name,
+                "严重度": SEVERITY_BADGE_MAP.get(c.severity, c.severity),
+                "A组药物": f"{c.group_a.label}（{'、'.join(c.group_a.keywords[:5])}）",
+                "A组洗脱窗": (
+                    f"{c.group_a.washout_window_days} 天"
+                    if c.group_a.washout_window_days is not None
+                    else "—"
+                ),
+                "B组药物/状态": f"{c.group_b.label}（{'、'.join(c.group_b.keywords[:5])}）",
+                "B组洗脱窗": (
+                    f"{c.group_b.washout_window_days} 天"
+                    if c.group_b.washout_window_days is not None
+                    else "—"
+                ),
+                "临床处置": c.suggested_handling,
+                "参考依据": "；".join(c.references),
+            }
+            for c in dc_catalog.conflicts
+        ]
+        st.dataframe(dc_rows, width="stretch", hide_index=True)
+
+    with sub_sc:
+        sc_rows = [
+            {
+                "量表ID": s.scale_id,
+                "量表名称": s.name,
+                "条目数": len(s.items),
+                "分值范围": f"{s.min_total:g} ~ {s.max_total:g}",
+                "分值方向": describe_score_direction(
+                    "higher_is_worse" if s.direction == "higher_is_worse" else "lower_is_worse"
+                ),
+                "说明": s.version_note,
+                "参考文献": "；".join(s.references),
+            }
+            for s in scales_catalog.scales
+        ]
+        st.dataframe(sc_rows, width="stretch", hide_index=True)
+
+
+def _handle_sanitize_input() -> None:
+    raw = st.session_state.get("raw_note_input", "")
+    cleaned, counts = sanitize_clinical_pii(raw)
+    if counts["total"] > 0:
+        st.session_state["pre_sanitize_backup"] = raw
+        st.session_state["raw_note_input"] = cleaned
+        st.session_state["last_sanitize_msg"] = (
+            f"已完成本地脱敏：姓名 {counts['person_name']} 处、手机号 {counts['phone']} 处、"
+            f"身份证号 {counts['id_card']} 处、住院/病历号 {counts['record_id']} 处。"
+        )
+    else:
+        st.session_state["last_sanitize_msg"] = "未检测到需要替换的显式隐私字段（未改动医学词汇）。"
+
+
+def _handle_undo_sanitize() -> None:
+    backup = st.session_state.get("pre_sanitize_backup")
+    if backup is not None:
+        st.session_state["raw_note_input"] = backup
+        st.session_state["pre_sanitize_backup"] = None
+        st.session_state["last_sanitize_msg"] = "已撤销上次本地脱敏。"
 
 
 def main() -> None:
@@ -1353,6 +2107,10 @@ def main() -> None:
     st.session_state.setdefault("copilot_state", None)
     st.session_state.setdefault("analysis_run_id", 0)
     st.session_state.setdefault("draft_mode_selector", "ward_round")
+    st.session_state.setdefault("pre_sanitize_backup", None)
+    st.session_state.setdefault("last_sanitize_msg", "")
+    st.session_state.setdefault("analysis_history", [])
+    st.session_state.setdefault("last_uploaded_file_sig", None)
 
     chosen_model, mock_mode = _render_sidebar(default_config)
 
@@ -1361,6 +2119,24 @@ def main() -> None:
         "脱敏病历结构化 → 双轨确定性红旗/用药冲突扫描 → 严校验量表算分 → 高约束查房/康复宣教文书"
     )
 
+    uploaded_file = st.file_uploader(
+        "📂 上传脱敏病历文件（支持 .txt / .md / .docx，读取后自动填入下方文本框）",
+        type=["txt", "md", "docx"],
+        key="clinical_note_uploader",
+    )
+    if uploaded_file is not None:
+        raw_bytes = uploaded_file.getvalue()
+        file_sig = f"{uploaded_file.name}:{len(raw_bytes)}"
+        if st.session_state.get("last_uploaded_file_sig") != file_sig:
+            try:
+                extracted_txt = extract_text_from_uploaded_file(uploaded_file.name, raw_bytes)
+                st.session_state["raw_note_input"] = extracted_txt
+                st.session_state["last_uploaded_file_sig"] = file_sig
+                st.session_state["copilot_state"] = None
+                st.success(f"✅ 已导入文件 `{uploaded_file.name}`（共 {len(extracted_txt)} 字），请先核查脱敏情况。")
+            except Exception as exc:
+                st.error(f"文件导入失败：{exc}")
+
     st.text_area(
         "脱敏病历 / 跨诊次记录原文",
         key="raw_note_input",
@@ -1368,7 +2144,31 @@ def main() -> None:
         placeholder="请粘贴已脱敏的骨伤/康复病历文本，或点击左侧边栏演示病例按钮一键填充...",
     )
 
-    col_mode, col_run, col_clear = st.columns([2, 1, 1])
+    pii_stats = detect_potential_pii(st.session_state.get("raw_note_input", ""))
+    if pii_stats["total"] > 0:
+        st.warning(
+            f"🔒 **隐私保护提醒**：检测到文本中可能包含 {pii_stats['total']} 处敏感标识"
+            f"（显式姓名 {pii_stats['person_name']} / 手机号 {pii_stats['phone']} / "
+            f"身份证号 {pii_stats['id_card']} / 住院或病历号 {pii_stats['record_id']}），"
+            "强烈建议先点击下方「🧹 一键本地脱敏」后再分析！"
+        )
+
+    pii_c1, pii_c2, pii_c3 = st.columns([1, 1, 3])
+    with pii_c1:
+        st.button("🧹 一键本地脱敏", key="sanitize_pii_btn", width="stretch", on_click=_handle_sanitize_input)
+    with pii_c2:
+        st.button(
+            "↩️ 撤销脱敏",
+            key="undo_sanitize_btn",
+            width="stretch",
+            disabled=st.session_state.get("pre_sanitize_backup") is None,
+            on_click=_handle_undo_sanitize,
+        )
+    with pii_c3:
+        if st.session_state.get("last_sanitize_msg"):
+            st.caption(st.session_state["last_sanitize_msg"])
+
+    col_mode, col_run, col_fast, col_clear = st.columns([1.8, 1.1, 1.3, 0.8])
     with col_mode:
         selected_mode = st.selectbox(
             "初始文书草稿类型",
@@ -1384,6 +2184,14 @@ def main() -> None:
             width="stretch",
             key="run_analysis_btn",
         )
+    with col_fast:
+        st.write("")
+        fast_clicked = st.button(
+            "⚡ 极速安全筛查",
+            width="stretch",
+            key="fast_scan_btn",
+            help="仅运行确定性红旗与用药冲突规则引擎，零大模型等待，秒出安全红线。",
+        )
     with col_clear:
         st.write("")
         st.button(
@@ -1393,38 +2201,116 @@ def main() -> None:
             on_click=_clear_workspace,
         )
 
+    if fast_clicked:
+        raw_input = st.session_state.get("raw_note_input", "")
+        if not raw_input.strip():
+            st.warning("请先输入脱敏病历文本，或从左侧边栏选择一键填充演示病例。")
+        else:
+            try:
+                fast_state = run_fast_safety_scan(raw_input)
+                st.session_state["copilot_state"] = fast_state
+                st.session_state["analysis_run_id"] = st.session_state.get("analysis_run_id", 0) + 1
+                _record_analysis_history(fast_state, label_prefix="⚡ ")
+            except Exception as exc:
+                st.error(f"极速筛查失败：{sanitize_error_message(exc)}")
+
     if run_clicked:
         raw_input = st.session_state.get("raw_note_input", "")
         if not raw_input.strip():
             st.warning("请先输入脱敏病历文本，或从左侧边栏选择一键填充演示病例。")
         else:
             try:
-                with st.spinner("正在执行结构化抽取、双轨安全扫描、确定性量表计算与草稿生成..."):
-                    result_state = run_copilot_analysis(
-                        raw_input,
-                        draft_mode=selected_mode,
+                t_start = time.perf_counter()
+                with st.status("正在执行 4 步骨伤/康复辅助分析...", expanded=True) as status_box:
+                    st.write(f"1/4 正在调用 `{chosen_model}`（{'Mock' if mock_mode else '在线'}）执行结构化与时间线抽取...")
+                    active_client = LLMClient()
+                    extraction_messages = build_extraction_messages(raw_input.strip())
+                    extract_res = active_client.extract_structured_json(
+                        extraction_messages,
+                        schema_model=CopilotExtractedNote,
                         model=chosen_model,
                         mock_mode=mock_mode,
                     )
+                    if extract_res.get("status") != "ok" or not isinstance(extract_res.get("data"), dict):
+                        raise RuntimeError(extract_res.get("message") or "病历结构化抽取失败。")
+                    extracted_note = extract_res["data"]
+
+                    st.write("2/4 正在运行双轨确定性红旗、洗脱期与时间线冲突扫描...")
+                    merged_facts = merge_snapshot_into_structured_facts(
+                        extracted_note.get("current_state_snapshot"),
+                        fallback_facts=extracted_note.get("structured_facts"),
+                    )
+                    risk_report = scan_clinical_risks(
+                        raw_text=raw_input.strip(),
+                        structured_facts=merged_facts,
+                    )
+
+                    st.write("3/4 正在执行确定性量表校验与算分...")
+                    scale_results = evaluate_scale_entries(extracted_note.get("scale_params", []))
+
+                    st.write("4/4 正在生成高约束临床文书并执行安全复检...")
+                    draft_result = generate_draft_document(
+                        selected_mode,
+                        extracted_note,
+                        risk_report,
+                        scale_results,
+                        model=chosen_model,
+                        mock_mode=mock_mode,
+                        client=active_client,
+                    )
+                    unified_alerts = collect_unified_alerts(risk_report, scale_results)
+                    elapsed_s = time.perf_counter() - t_start
+                    status_box.update(
+                        label=f"✅ 分析完成（耗时 {elapsed_s:.2f}s | 检出 {len(unified_alerts)} 项警示）",
+                        state="complete",
+                        expanded=False,
+                    )
+
+                result_state = {
+                    "raw_text": raw_input.strip(),
+                    "extracted_note": extracted_note,
+                    "risk_report": risk_report,
+                    "scale_results": scale_results,
+                    "unified_alerts": unified_alerts,
+                    "draft": draft_result,
+                    "draft_mode": selected_mode,
+                    "draft_stale": False,
+                    "trace": {
+                        "extraction_model": extract_res.get("model"),
+                        "extraction_mock": extract_res.get("mock"),
+                        "extraction_raw_content": extract_res.get("raw_content"),
+                        "draft_model": draft_result.get("model"),
+                        "draft_mock": draft_result.get("mock"),
+                        "draft_usage": draft_result.get("usage", {}),
+                        "elapsed_seconds": round(elapsed_s, 2),
+                    },
+                }
                 st.session_state["copilot_state"] = result_state
                 st.session_state["analysis_run_id"] = st.session_state.get("analysis_run_id", 0) + 1
+                _record_analysis_history(result_state)
             except Exception as exc:
-                st.error(f"分析执行失败：{sanitize_error_message(exc)}")
+                zh_err, tech_err = format_llm_error_zh(str(exc), model=chosen_model)
+                st.error(f"分析执行失败：\n\n{zh_err}")
+                with st.expander("🔍 查看技术细节（已脱敏）", expanded=False):
+                    st.code(tech_err, language="text")
 
     state = st.session_state.get("copilot_state")
     if not state:
-        st.info("👆 请点击上方 **「开始分析」** 按钮（可先在左侧边栏选择任意演示病例一键填充）。")
+        st.info("👆 请点击上方 **「🚀 开始分析」** 或 **「⚡ 极速安全筛查」** 按钮（可先在左侧边栏选择任意演示病例一键填充）。")
+        with st.expander("📚 知识库速查（只读：红旗规则 / 用药冲突洗脱窗 / 临床量表）", expanded=False):
+            _render_tab_kb_reference()
         return
 
     st.divider()
     _render_top_safety_banner(state)
 
-    tab1, tab2, tab3, tab4 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
         [
             "Tab 1：结构化病历与时间线",
             "Tab 2：确定性量表计算",
             "Tab 3：文书草稿",
             "Tab 4：执行轨迹 (Trace)",
+            "Tab 5：📚 知识库速查",
         ]
     )
     with tab1:
@@ -1435,6 +2321,8 @@ def main() -> None:
         _render_tab_draft(state, chosen_model=chosen_model, mock_mode=mock_mode)
     with tab4:
         _render_tab_trace(state)
+    with tab5:
+        _render_tab_kb_reference()
 
 
 if __name__ == "__main__":

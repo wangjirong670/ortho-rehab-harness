@@ -30,8 +30,8 @@
 |                        共享医学资产与确定性工具层 (Single Source of Truth)           |
 |                                                                                   |
 |  knowledge_base/ (纯中文 YAML)              core_tools/ (Python 确定性引擎)         |
-|  ├── red_flags.yaml       (10 条红旗征)     ├── schemas.py      (Pydantic v2 校验) |
-|  ├── drug_conflicts.yaml  (10 组用药冲突)   ├── rule_scanner.py (双轨扫描/洗脱/消解) |
+|  ├── red_flags.yaml       (16 条红旗征)     ├── schemas.py      (Pydantic v2 校验) |
+|  ├── drug_conflicts.yaml  (11 组用药冲突)   ├── rule_scanner.py (双轨扫描/洗脱/消解) |
 |  └── scales_spec.yaml     (4 套骨伤量表)    ├── calculator.py   (零容错量表算分)     |
 |                                            └── llm_client.py   (LiteLLM + Mock)   |
 +-----------------------------------------+-----------------------------------------+
@@ -46,6 +46,7 @@
 |    * Tab 1: 时间线演变与状态快照    |           |  - evaluator.py (四维确定性判分)   |
 |    * Tab 2: 严校验量表算分与补录    |           |  - streamlit_bench.py (对比看板)   |
 |    * Tab 3: 查房提纲 / 康复宣教草稿 |           +-----------------------------------+
+|    * Tab 4: 确定性执行轨迹 (Trace)  |
 +-----------------------------------+
 ```
 
@@ -205,9 +206,14 @@ ortho-rehab-harness/
 ├── requirements.txt
 ├── .env.example                       # 多模型 LiteLLM 环境变量模板
 ├── .gitignore                         # 屏蔽 .env、private/*、results/ 与 .venv/
+├── launcher.py                        # 统一桌面启动器（Tk 面板 / 模型向导 / 冻结路径适配）
+├── packaging/                         # Windows --onedir 打包脚本、图标与上手说明
+│   ├── build_release.py               # PyInstaller 构建 + 白名单防泄漏审计 + ZIP 打包
+│   ├── README_RELEASE.txt             # 绿色版临床医生 3 分钟上手卡
+│   └── assets/app_icon.ico            # 医疗盾牌应用图标
 ├── docs/
 │   ├── blueprint.md                   # 工程蓝图与分周验收约束
-│   └── assets/                        # 演示截图占位目录
+│   └── assets/                        # 演示截图资源目录
 ├── knowledge_base/                    # 【共享医学资产】纯中文 YAML
 │   ├── red_flags.yaml                 # 骨伤/康复红旗征规则库（16 条）
 │   ├── drug_conflicts.yaml            # 中西医结合用药冲突与洗脱窗规则库（11 组）
@@ -230,7 +236,7 @@ ortho-rehab-harness/
 │   ├── runner.py                      # 多轮批量评测执行器（bare_llm vs harness_copilot）
 │   ├── evaluator.py                   # 纯 Python 四维确定性判分器
 │   └── streamlit_bench.py             # 对比看板与翻车回放 UI
-└── tests/                             # 自动化测试套件（164 项单测与 AppTest）
+└── tests/                             # 自动化测试套件（全链路单测与 Streamlit AppTest）
 ```
 
 ---
