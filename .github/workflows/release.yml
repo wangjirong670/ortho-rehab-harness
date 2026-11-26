@@ -1,0 +1,80 @@
+name: Build & Publish Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag / version (e.g. v0.1.0)"
+        required: false
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies and PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Validate knowledge base and run test suite
+        run: |
+          python scripts/validate_kb.py
+          python -m pytest -q
+
+      - name: Resolve release version
+        id: meta
+        shell: pwsh
+        run: |
+          $ver = "${{ github.event.inputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($ver)) {
+            $ver = "${{ github.ref_name }}"
+          }
+          if ([string]::IsNullOrWhiteSpace($ver)) {
+            $ver = "v0.1.0"
+          }
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Build Windows onedir package and release archive
+        shell: pwsh
+        run: |
+          python packaging/build_release.py --version "${{ steps.meta.outputs.version }}"
+
+      - name: Smoke-test frozen executable
+        shell: pwsh
+        run: |
+          .\dist\OrthoRehab-TCM-Harness\OrthoRehab-TCM-Harness.exe --check-env
+
+      - name: Upload test artifact (manual trigger)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: OrthoRehab-TCM-Harness-${{ steps.meta.outputs.version }}-win64
+          path: |
+            release_artifacts/*.zip
+            release_artifacts/SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release_artifacts/*.zip
+            release_artifacts/SHA256SUMS.txt
