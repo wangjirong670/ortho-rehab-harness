@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+import desktop_app
 import launcher
 from app_benchmark import runner as bench_runner
 from app_benchmark import streamlit_bench
@@ -313,14 +314,27 @@ def test_packaging_whitelist_icon_and_security_audit(tmp_path: Path) -> None:
     assert build_release.is_forbidden_bundle_path("core_tools/__pycache__/schemas.cpython-311.pyc") is True
     assert build_release.is_forbidden_bundle_path(".git/config") is True
     assert build_release.is_forbidden_bundle_path(".venv/pyvenv.cfg") is True
+    assert build_release.is_forbidden_bundle_path("frontend/node_modules/react/index.js") is True
+    assert build_release.is_forbidden_bundle_path("nested/node_modules/pkg/a.js") is True
+    assert build_release.is_forbidden_bundle_path("frontend/.vite/deps/chunk.js") is True
+    assert build_release.is_forbidden_bundle_path("frontend/dist/index.html") is False
+    assert build_release.is_forbidden_bundle_path("frontend/dist/assets/app.js") is False
     assert build_release.is_forbidden_bundle_path("knowledge_base/red_flags.yaml") is False
 
     bundle_files = build_release.collect_whitelisted_bundle_files(PROJECT_ROOT)
     rel_paths = [src.relative_to(PROJECT_ROOT).as_posix() for src, _ in bundle_files]
     assert "knowledge_base/red_flags.yaml" in rel_paths
+    assert "desktop_app.py" in rel_paths
+    assert "launcher.py" in rel_paths
+    assert "backend/main.py" in rel_paths
+    assert "backend/routers/copilot.py" in rel_paths
+    assert "frontend/dist/index.html" in rel_paths
     assert "app_benchmark/test_cases/public/ORTHO_REDFLAG_001.yaml" in rel_paths
     assert "app_benchmark/test_cases/private/README.md" in rel_paths
     assert "packaging/assets/app_icon.ico" in rel_paths
+    assert "app_copilot/streamlit_copilot.py" not in rel_paths
+    assert "app_benchmark/streamlit_bench.py" not in rel_paths
+    assert not any("node_modules" in p for p in rel_paths)
     assert not any(p == ".env" or p.endswith(".pyc") for p in rel_paths)
     assert not any(
         p.startswith("app_benchmark/test_cases/private/") and not p.endswith(("README.md", ".gitkeep"))
@@ -336,13 +350,19 @@ def test_packaging_whitelist_icon_and_security_audit(tmp_path: Path) -> None:
         icon_path=icon_path,
     )
     spec_text = spec_file.read_text(encoding="utf-8")
-    assert "console=True" in spec_text
+    assert "desktop_app.py" in spec_text
+    assert "console=False" in spec_text
+    assert "console=True" not in spec_text
     assert "app_icon.ico" in spec_text
+    assert "streamlit" in spec_text  # in excludes
+    assert "webview" in spec_text
 
     # Audit catches forbidden files injected into dist directory
     fake_dist = tmp_path / "OrthoRehab-TCM-Harness"
     (fake_dist / "_internal" / "app_benchmark" / "test_cases" / "private").mkdir(parents=True)
     (fake_dist / "_internal" / "app_benchmark" / "test_cases" / "private" / "README.md").write_text("ok", encoding="utf-8")
+    (fake_dist / "_internal" / "frontend" / "dist").mkdir(parents=True)
+    (fake_dist / "_internal" / "frontend" / "dist" / "index.html").write_text("<html></html>", encoding="utf-8")
     (fake_dist / "results").mkdir()
     assert build_release.audit_dist_directory(fake_dist) == []
 
@@ -350,7 +370,71 @@ def test_packaging_whitelist_icon_and_security_audit(tmp_path: Path) -> None:
     (fake_dist / "_internal" / "app_benchmark" / "test_cases" / "private" / "leak.yaml").write_text("x: 1", encoding="utf-8")
     (fake_dist / "_internal" / "app_benchmark" / "results").mkdir(parents=True)
     (fake_dist / "_internal" / "app_benchmark" / "results" / "old.json").write_text("{}", encoding="utf-8")
+    (fake_dist / "_internal" / "frontend" / "node_modules").mkdir(parents=True)
+    (fake_dist / "_internal" / "frontend" / "node_modules" / "x.js").write_text("1", encoding="utf-8")
+    (fake_dist / "_internal" / "app_copilot").mkdir(parents=True)
+    (fake_dist / "_internal" / "app_copilot" / "streamlit_copilot.py").write_text("import streamlit", encoding="utf-8")
     violations = build_release.audit_dist_directory(fake_dist)
     assert ".env" in violations
     assert "_internal/app_benchmark/test_cases/private/leak.yaml" in violations
     assert "_internal/app_benchmark/results/old.json" in violations
+    assert "_internal/frontend/node_modules" in violations
+    assert "_internal/app_copilot/streamlit_copilot.py" in violations
+
+
+def test_desktop_app_check_and_error_logging(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    parser = desktop_app.build_cli_parser()
+    assert parser.parse_args(["--check"]).check is True
+    assert parser.parse_args(["--check-env"]).check is True
+    assert parser.parse_args(["--check", "--output", "out.json"]).output == "out.json"
+    assert "hide_console_window_if_gui" not in (PROJECT_ROOT / "desktop_app.py").read_text(encoding="utf-8")
+
+    # Simulate PyInstaller console=False where sys.stdout/sys.stderr are None
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    stream = desktop_app._ensure_standard_streams(tmp_path)
+    try:
+        assert stream is not None
+        assert sys.stdout is stream
+        assert sys.stderr is stream
+        assert sys.stdout.isatty() is False
+        assert sys.stderr.isatty() is False
+        print("null-stream-redirect-ok")
+    finally:
+        if stream is not None:
+            stream.close()
+    assert (tmp_path / "logs" / "desktop_app.log").is_file()
+    assert "null-stream-redirect-ok" in (tmp_path / "logs" / "desktop_app.log").read_text(encoding="utf-8")
+    monkeypatch.undo()
+
+    code, payload = desktop_app.run_startup_check()
+    assert code == 0
+    assert payload["status"] == "ok"
+    assert payload["version"] == "0.3.0"
+    assert payload["frontend_ready"] is True
+    assert payload["knowledge_base"] == {"red_flags": 16, "drug_conflicts": 11, "scales": 4}
+
+    custom_out = tmp_path / "custom_check.json"
+    written_default = desktop_app._write_check_result(tmp_path, payload, output_path=str(custom_out))
+    assert written_default == tmp_path / "logs" / "check_result.json"
+    assert json.loads(written_default.read_text(encoding="utf-8"))["status"] == "ok"
+    assert json.loads(custom_out.read_text(encoding="utf-8"))["frontend_ready"] is True
+
+    for flag in ("--check", "--check-env"):
+        proc = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / "desktop_app.py"), flag],
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+        cli_payload = json.loads(proc.stdout)
+        assert cli_payload["status"] == "ok"
+        assert cli_payload["frontend_ready"] is True
+
+    log_path = desktop_app._log_desktop_error(tmp_path, "模拟启动异常", show_dialog=False)
+    assert log_path == tmp_path / "logs" / "desktop_app.log"
+    assert "模拟启动异常" in log_path.read_text(encoding="utf-8")

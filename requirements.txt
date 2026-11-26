@@ -1,5 +1,10 @@
 # Core framework & UI
 streamlit>=1.38.0
+fastapi>=0.115.0
+uvicorn>=0.30.0
+python-multipart>=0.0.9
+httpx>=0.27.0
+pywebview>=5.0
 
 # Unified LLM routing (OpenAI / DeepSeek / Qwen / Zhipu / OpenAI-compatible)
 litellm>=1.50.0

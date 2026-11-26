@@ -1,11 +1,13 @@
 # OrthoRehab-TCM-Harness
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.38%2B-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![React + Vite](https://img.shields.io/badge/React%20%2B%20Vite-SPA-61DAFB?logo=react&logoColor=black)](frontend/)
+[![PyWebView](https://img.shields.io/badge/Desktop-PyWebView-1E293B)](desktop_app.py)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Clinical Safety Harness](https://img.shields.io/badge/Clinical%20Safety-Deterministic%20Harness-0E7490)](knowledge_base/red_flags.yaml)
 
-**用确定性临床护栏包裹概率型大模型——面向中医骨伤与康复科的桌面干活副驾 & 红队安全评测沙箱**。
+**用确定性临床护栏包裹概率型大模型——面向中医骨伤与康复科的原生桌面干活副驾 & 红队安全评测工作台**。
 
 ---
 
@@ -23,7 +25,7 @@
 
 ## 二、核心架构与工程亮点
 
-项目采用**“一套共享医学资产，两个前端入口”**的共生架构：纯中文医学规则与量表规范（`knowledge_base/`）和确定性工具层（`core_tools/`）同时驱动桌面干活副驾（`app_copilot/`）与红队评测沙箱（`app_benchmark/`）。
+项目自 `v0.3.0` 起采用**“一套共享医学资产，前后端分离单窗口原生桌面工作台”**架构：纯中文医学规则与量表规范（`knowledge_base/`）和确定性工具层（`core_tools/`）支撑 `app_copilot/service.py` 与 `app_benchmark/service.py`，由 FastAPI（`backend/`）统一暴露 REST/SSE 接口，前端 React + Vite SPA（`frontend/`）经 PyWebView（`desktop_app.py`）封装为单窗口桌面应用（旧版双端口 Tkinter/Streamlit 启动器已弃用）。
 
 ```text
 +-----------------------------------------------------------------------------------+
@@ -39,15 +41,17 @@
                   +-----------------------+-----------------------+
                   v                                               v
 +-----------------------------------+           +-----------------------------------+
-|  项目 B：桌面干活副驾 (app_copilot) |           |  项目 A：红队安全评测沙箱 (app_benchmark)|
+|  项目 B：桌面副驾服务 (app_copilot)|           |  项目 A：红队评测引擎 (app_benchmark)|
 |  - prompts.py (时间线抽取与文书约束)|           |  - test_cases/public/ (20 道公开题)|
-|  - streamlit_copilot.py           |           |  - test_cases/private/ (.gitignore)|
-|    * 顶部高危红旗/冲突统一预警横幅  |           |  - runner.py (bare vs harness)    |
-|    * Tab 1: 时间线演变与状态快照    |           |  - evaluator.py (四维确定性判分)   |
-|    * Tab 2: 严校验量表算分与补录    |           |  - streamlit_bench.py (对比看板)   |
-|    * Tab 3: 查房提纲 / 康复宣教草稿 |           +-----------------------------------+
-|    * Tab 4: 确定性执行轨迹 (Trace)  |
-+-----------------------------------+
+|  - service.py (结构化/算分/复检编排)|           |  - runner.py & evaluator.py       |
++-----------------+-----------------+           +-----------------+-----------------+
+                  |                                               |
+                  +-----------------------+-----------------------+
+                                          v
++-----------------------------------------------------------------------------------+
+|      FastAPI REST/SSE (backend/) + React/Vite SPA (frontend/dist/) + PyWebView    |
+|      统一单入口 desktop_app.py（原生窗口 / --browser / --server-only / --check）   |
++-----------------------------------------------------------------------------------+
 ```
 
 ### 四项核心工程设计
@@ -132,31 +136,30 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-### 2. 零成本离线 Mock 模式一键体验（无需 API Key）
+### 2. 一键启动原生桌面工作台（支持零成本离线 Mock）
 
-在 `.env` 中将 `LLM_MOCK_MODE=false` 改为 `LLM_MOCK_MODE=true`，或直接在命令行临时开启后启动两个 Streamlit 应用：
-
-**Windows (PowerShell)：**
+**方式 A：原生桌面窗口（PyWebView，推荐）**
 ```powershell
-$env:LLM_MOCK_MODE="true"
+# 先构建前端静态产物（首次或修改 frontend/ 后执行）
+cd frontend ; npm ci ; if ($LASTEXITCODE -eq 0) { npm run build } ; cd ..
 
-# 启动项目 B：骨伤/康复桌面干活副驾
-.\.venv\Scripts\streamlit.exe run app_copilot/streamlit_copilot.py
-
-# 或启动项目 A：红队安全评测沙箱看板
-.\.venv\Scripts\streamlit.exe run app_benchmark/streamlit_bench.py
+# 启动单窗口一体桌面工作台（加上 --mock 可零 API Key 离线体验）
+.\.venv\Scripts\python.exe desktop_app.py --mock
 ```
 
-**macOS / Linux：**
-```bash
-export LLM_MOCK_MODE=true
+**方式 B：浏览器模式 / 仅后端服务模式**
+```powershell
+# 在系统默认浏览器中打开一体工作台
+.\.venv\Scripts\python.exe desktop_app.py --browser --mock
 
-# 启动项目 B：骨伤/康复桌面干活副驾
-streamlit run app_copilot/streamlit_copilot.py
+# 仅启动 FastAPI 后端（http://127.0.0.1:8000）
+.\.venv\Scripts\python.exe desktop_app.py --server-only --mock --port 8000
 
-# 或启动项目 A：红队安全评测沙箱看板
-streamlit run app_benchmark/streamlit_bench.py
+# 环境与路由自检（兼容 --check-env 别名）
+.\.venv\Scripts\python.exe desktop_app.py --check
 ```
+
+*(注：旧版 `launcher.py` + `streamlit_copilot.py` / `streamlit_bench.py` 双网页入口自 `v0.3.0` 起已弃用，打包产物不再包含 Streamlit。)*
 
 ### 3. 命令行校验、20 题批量评测与全量单测
 
@@ -187,13 +190,14 @@ streamlit run app_benchmark/streamlit_bench.py
 
 ### 5. Windows 绿色免安装版下载与本地打包构建
 
-- **直接下载 Release 绿色版（免 Python 环境）**：前往 GitHub Releases 下载 `OrthoRehab-TCM-Harness-<version>-win64.zip` 与 `SHA256SUMS.txt`，校验哈希后解压至本地目录，双击 `OrthoRehab-TCM-Harness.exe` 打开桌面控制面板即可一键启动副驾（8501）与红队沙箱（8502）；同级无 `.env` 时默认启用离线 Mock 演示模式。
-- **本地打包构建（PyInstaller `--onedir`）**：
+- **直接下载 Release 绿色版（免 Python / Node 环境）**：前往 GitHub Releases 下载 `OrthoRehab-TCM-Harness-<version>-win64.zip` 与 `SHA256SUMS.txt`，校验哈希后解压至本地目录，双击 `OrthoRehab-TCM-Harness.exe` 即可打开原生单窗口一体工作台（支持 `--browser` / `--server-only` / `--check` / `--mock`）。
+- **本地打包构建（PyInstaller `--onedir`，需已构建 `frontend/dist/`）**：
   ```powershell
+  cd frontend ; npm ci ; if ($LASTEXITCODE -eq 0) { npm run build } ; cd ..
   .\.venv\Scripts\python.exe -m pip install pyinstaller
-  .\.venv\Scripts\python.exe packaging/build_release.py --version v0.2.0
+  .\.venv\Scripts\python.exe packaging/build_release.py --version v0.3.0
   ```
-  构建产物输出至 `release_artifacts/OrthoRehab-TCM-Harness-v0.2.0-win64.zip` 与 `release_artifacts/SHA256SUMS.txt`（已配置白名单严格过滤 `.env`、`private/` 用例与历史 `results/` 报告）。
+  构建产物输出至 `release_artifacts/OrthoRehab-TCM-Harness-v0.3.0-win64.zip` 与 `release_artifacts/SHA256SUMS.txt`（已配置白名单严格过滤 `.env`、`node_modules/`、`private/` 用例、历史 `results/` 报告及旧 Streamlit 残留）。
 
 ---
 
@@ -205,11 +209,18 @@ ortho-rehab-harness/
 ├── LICENSE
 ├── requirements.txt
 ├── .env.example                       # 多模型 LiteLLM 环境变量模板
-├── .gitignore                         # 屏蔽 .env、private/*、results/ 与 .venv/
-├── launcher.py                        # 统一桌面启动器（Tk 面板 / 模型向导 / 冻结路径适配）
-├── packaging/                         # Windows --onedir 打包脚本、图标与上手说明
+├── .gitignore                         # 屏蔽 .env、node_modules/、private/*、results/ 与 .venv/
+├── desktop_app.py                     # v0.3.0 原生桌面统一主入口（PyWebView + Uvicorn）
+├── launcher.py                        # 底层运行时路径解析与环境加载工具模块
+├── backend/                           # FastAPI REST & SSE 服务（/api/v1/* + SPA 托管）
+│   ├── main.py
+│   ├── deps.py
+│   └── routers/                       # copilot / benchmark / kb / settings 路由
+├── frontend/                          # React + Vite + TypeScript 前端工作台源码与 dist/
+├── packaging/                         # Windows --onedir 打包脚本、图标、CI 模板与上手卡
 │   ├── build_release.py               # PyInstaller 构建 + 白名单防泄漏审计 + ZIP 打包
-│   ├── README_RELEASE.txt             # 绿色版临床医生 3 分钟上手卡
+│   ├── README_RELEASE.txt             # v0.3.0 原生桌面版上手指南
+│   ├── release.yml.template           # GitHub Actions 自动发版模板
 │   └── assets/app_icon.ico            # 医疗盾牌应用图标
 ├── docs/
 │   ├── blueprint.md                   # 工程蓝图与分周验收约束
@@ -225,18 +236,18 @@ ortho-rehab-harness/
 │   └── llm_client.py                  # LiteLLM 多模型统一封装 + Mock 客户端
 ├── scripts/
 │   └── validate_kb.py                 # 知识库与全部评测用例一键校验脚本
-├── app_copilot/                       # 【项目 B：桌面干活副驾】
+├── app_copilot/                       # 【项目 B：桌面副驾核心服务】
 │   ├── prompts.py                     # 时间线/快照抽取 Schema 与高约束文书 Prompt
-│   └── streamlit_copilot.py           # 4-Tab 交互副驾 UI 与编排管线
-├── app_benchmark/                     # 【项目 A：红队安全评测沙箱】
+│   └── service.py                     # 病历抽取/双轨扫描/算分/复检编排服务
+├── app_benchmark/                     # 【项目 A：红队安全评测引擎】
 │   ├── test_cases/
 │   │   ├── public/                    # 公开评测集（20 道：001–020）
 │   │   └── private/                   # 私有防泄漏集（除 README/.gitkeep 外全部忽略）
 │   ├── results/                       # 评测 JSON 报告输出目录（整目录已忽略）
 │   ├── runner.py                      # 多轮批量评测执行器（bare_llm vs harness_copilot）
 │   ├── evaluator.py                   # 纯 Python 四维确定性判分器
-│   └── streamlit_bench.py             # 对比看板与翻车回放 UI
-└── tests/                             # 自动化测试套件（185 项单测与 AppTest）
+│   └── service.py                     # 红队评测任务与对比报告服务
+└── tests/                             # 自动化测试套件（全链路单测、API 与 AppTest）
 ```
 
 ---

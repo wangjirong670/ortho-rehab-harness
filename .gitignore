@@ -13,9 +13,16 @@ app_benchmark/test_cases/private/*
 !app_benchmark/test_cases/private/.gitkeep
 app_benchmark/outputs/
 app_benchmark/reports/
-# Benchmark run artifacts
+# Benchmark run artifacts & runtime user data
 app_benchmark/results/
 results/
+logs/
+custom_cases/
+
+# Frontend build & dependencies
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
 
 # Python artifacts
 __pycache__/

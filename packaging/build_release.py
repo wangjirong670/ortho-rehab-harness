@@ -1,7 +1,7 @@
 """Build Windows --onedir PyInstaller distribution and release ZIP for OrthoRehab-TCM-Harness.
 
 Usage:
-    python packaging/build_release.py --version v0.1.0
+    python packaging/build_release.py --version v0.3.0
 """
 
 from __future__ import annotations
@@ -19,66 +19,94 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 APP_NAME = "OrthoRehab-TCM-Harness"
+DEFAULT_VERSION = "v0.3.0"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 APP_ICON_REL = Path("packaging") / "assets" / "app_icon.ico"
 
 METADATA_PACKAGES: Tuple[str, ...] = (
-    "streamlit",
+    "fastapi",
+    "uvicorn",
+    "starlette",
+    "httpx",
+    "python-multipart",
+    "pywebview",
+    "pythonnet",
+    "clr-loader",
+    "proxy_tools",
+    "bottle",
     "litellm",
     "openai",
     "pydantic",
     "pydantic_core",
-    "plotly",
     "packaging",
     "requests",
     "tiktoken",
     "pyyaml",
     "python-dotenv",
     "certifi",
-    "altair",
-    "pyarrow",
-    "narwhals",
     "click",
-    "httpx",
-    "aiohttp",
-    "jsonschema",
-    "uvicorn",
-    "starlette",
-    "fastapi",
     "anyio",
-    "rich",
-    "tornado",
-    "tenacity",
+    "jsonschema",
+    "aiohttp",
 )
 
 DATA_PACKAGES: Tuple[str, ...] = (
-    "streamlit",
-    "plotly",
     "litellm",
     "tiktoken_ext",
     "certifi",
-    "altair",
+)
+
+COLLECT_ALL_PACKAGES: Tuple[str, ...] = (
+    "webview",
+    "pythonnet",
+    "clr_loader",
+    "proxy_tools",
+    "bottle",
 )
 
 EXPLICIT_HIDDEN_IMPORTS: Tuple[str, ...] = (
-    "streamlit.runtime.scriptrunner.magic_funcs",
-    "streamlit.web.cli",
-    "streamlit.web.bootstrap",
-    "streamlit.runtime.caching",
+    "uvicorn.logging",
+    "uvicorn.loops",
+    "uvicorn.loops.auto",
+    "uvicorn.protocols",
+    "uvicorn.protocols.http",
+    "uvicorn.protocols.http.auto",
+    "uvicorn.protocols.websockets",
+    "uvicorn.protocols.websockets.auto",
+    "uvicorn.lifespan",
+    "uvicorn.lifespan.on",
+    "fastapi",
+    "starlette",
+    "httpx",
+    "python_multipart",
+    "multipart",
     "tiktoken_ext.openai_public",
     "tiktoken_ext",
     "yaml",
     "dotenv",
     "pydantic",
-    "plotly",
     "litellm",
     "openai",
-    "tkinter",
-    "tkinter.ttk",
-    "tkinter.messagebox",
+    "launcher",
+    "desktop_app",
+)
+
+EXCLUDED_MODULES: Tuple[str, ...] = (
+    "pytest",
+    "_pytest",
+    "IPython",
+    "jupyter",
+    "streamlit",
+    "plotly",
+    "altair",
+    "pyarrow",
+    "tornado",
+    "pandas",
+    "matplotlib",
 )
 
 _ALLOWED_PRIVATE_FILENAMES = frozenset({"README.md", ".gitkeep"})
+_DEPRECATED_STREAMLIT_FILES = frozenset({"streamlit_copilot.py", "streamlit_bench.py"})
 
 
 def normalize_version(version: str) -> str:
@@ -103,7 +131,7 @@ def is_forbidden_bundle_path(rel_posix: str, *, allow_third_party_pem: bool = Fa
     parts = norm.split("/")
     filename = parts[-1]
 
-    # Cache, VCS, virtualenv anywhere; build outputs & runtime dirs at root
+    # Cache, VCS, virtualenv, frontend node_modules/.vite anywhere; build outputs & runtime dirs at root
     always_forbidden_dirs = {
         "__pycache__",
         ".git",
@@ -112,6 +140,8 @@ def is_forbidden_bundle_path(rel_posix: str, *, allow_third_party_pem: bool = Fa
         ".pytest_cache",
         ".mypy_cache",
         ".ruff_cache",
+        "node_modules",
+        ".vite",
     }
     if any(part in always_forbidden_dirs for part in parts):
         return True
@@ -151,6 +181,13 @@ def is_forbidden_bundle_path(rel_posix: str, *, allow_third_party_pem: bool = Fa
 
 def collect_whitelisted_bundle_files(project_root: Path = PROJECT_ROOT) -> List[Tuple[Path, str]]:
     """Collect strictly whitelisted business source/asset files for PyInstaller datas."""
+    frontend_dist_dir = project_root / "frontend" / "dist"
+    frontend_index = frontend_dist_dir / "index.html"
+    if not frontend_index.is_file():
+        raise FileNotFoundError(
+            f"Missing built frontend SPA ({frontend_index}). Please run 'npm ci && npm run build' inside frontend/ first."
+        )
+
     entries: List[Tuple[Path, str]] = []
 
     def _add(src: Path, dest_dir: str) -> None:
@@ -166,7 +203,25 @@ def collect_whitelisted_bundle_files(project_root: Path = PROJECT_ROOT) -> List[
 
     for pkg in ("core_tools", "app_copilot", "app_benchmark"):
         for p in sorted((project_root / pkg).glob("*.py")):
+            if p.name in _DEPRECATED_STREAMLIT_FILES:
+                continue
             _add(p, pkg)
+
+    backend_dir = project_root / "backend"
+    if backend_dir.is_dir():
+        for p in sorted(backend_dir.rglob("*.py")):
+            if "__pycache__" in p.parts:
+                continue
+            _add(p, p.parent.relative_to(project_root).as_posix())
+
+    for p in sorted(frontend_dist_dir.rglob("*")):
+        if p.is_file():
+            _add(p, p.parent.relative_to(project_root).as_posix())
+
+    for entry_py in ("launcher.py", "desktop_app.py"):
+        candidate = project_root / entry_py
+        if candidate.is_file():
+            _add(candidate, ".")
 
     for p in sorted((project_root / "app_benchmark" / "test_cases" / "public").glob("*.yaml")):
         _add(p, "app_benchmark/test_cases/public")
@@ -314,12 +369,17 @@ def audit_dist_directory(dist_dir: Path) -> List[str]:
         in_internal = rel.startswith("_internal/")
         logical_rel = rel[len("_internal/"):] if in_internal else rel
         if path.is_dir():
-            if path.name in {"__pycache__", ".git", ".venv", "venv", ".pytest_cache"}:
+            if path.name in {"__pycache__", ".git", ".venv", "venv", ".pytest_cache", "node_modules", ".vite", "streamlit"}:
                 violations.append(rel)
             continue
         if logical_rel == "results":
             continue
-        repo_owned = logical_rel.startswith(("knowledge_base/", "core_tools/", "app_copilot/", "app_benchmark/"))
+        if path.name in _DEPRECATED_STREAMLIT_FILES:
+            violations.append(rel)
+            continue
+        repo_owned = logical_rel.startswith(
+            ("knowledge_base/", "core_tools/", "app_copilot/", "app_benchmark/", "backend/", "frontend/")
+        )
         if is_forbidden_bundle_path(logical_rel, allow_third_party_pem=(in_internal and not repo_owned)):
             violations.append(rel)
     return violations
@@ -332,12 +392,14 @@ def generate_pyinstaller_spec(
     bundle_files: Sequence[Tuple[Path, str]],
     icon_path: Optional[Path] = None,
 ) -> Path:
-    """Write a deterministic PyInstaller --onedir .spec file."""
+    """Write a deterministic PyInstaller --onedir .spec file targeting desktop_app.py."""
     datas_literal = repr([(str(src), dest) for src, dest in bundle_files])
     metadata_literal = repr(list(METADATA_PACKAGES))
     data_pkgs_literal = repr(list(DATA_PACKAGES))
+    collect_all_literal = repr(list(COLLECT_ALL_PACKAGES))
     hidden_literal = repr(list(EXPLICIT_HIDDEN_IMPORTS))
-    launcher_literal = repr(str(project_root / "launcher.py"))
+    excludes_literal = repr(list(EXCLUDED_MODULES))
+    entry_literal = repr(str(project_root / "desktop_app.py"))
     pathex_literal = repr([str(project_root)])
     resolved_icon = icon_path if (icon_path and icon_path.is_file()) else None
     icon_literal = repr(str(resolved_icon)) if resolved_icon else "None"
@@ -345,6 +407,7 @@ def generate_pyinstaller_spec(
     spec_content = f"""# -*- mode: python ; coding: utf-8 -*-
 import importlib.metadata as _md
 from PyInstaller.utils.hooks import (
+    collect_all,
     collect_data_files,
     collect_dynamic_libs,
     collect_submodules,
@@ -373,10 +436,21 @@ for _dpkg in {data_pkgs_literal}:
         pass
 
 hiddenimports = {hidden_literal}
+for _all_pkg in {collect_all_literal}:
+    try:
+        _d, _b, _h = collect_all(_all_pkg)
+        datas += _d
+        binaries += _b
+        hiddenimports += _h
+    except Exception:
+        pass
+
 for _app_pkg in (
+    "backend",
     "core_tools",
-    "app_copilot",
-    "app_benchmark",
+    "uvicorn",
+    "fastapi",
+    "starlette",
     "litellm.rust_bridge",
     "litellm.litellm_core_utils",
     "tiktoken_ext",
@@ -386,16 +460,17 @@ for _app_pkg in (
     except Exception:
         pass
 
-try:
-    hiddenimports += collect_submodules(
-        "streamlit",
-        filter=lambda name: not name.startswith("streamlit.testing"),
-    )
-except Exception:
-    pass
+for _filtered_pkg in ("app_copilot", "app_benchmark"):
+    try:
+        hiddenimports += collect_submodules(
+            _filtered_pkg,
+            filter=lambda name: not name.endswith(("streamlit_copilot", "streamlit_bench")),
+        )
+    except Exception:
+        pass
 
 a = Analysis(
-    [{launcher_literal}],
+    [{entry_literal}],
     pathex={pathex_literal},
     binaries=binaries,
     datas=datas,
@@ -403,7 +478,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={{}},
     runtime_hooks=[],
-    excludes=["pytest", "_pytest", "IPython", "jupyter"],
+    excludes={excludes_literal},
     noarchive=False,
     optimize=0,
 )
@@ -419,7 +494,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -560,7 +635,7 @@ def build_release(
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Build Windows Release ZIP for OrthoRehab-TCM-Harness")
-    parser.add_argument("--version", default="v0.1.0", help="Release version tag (e.g. v0.1.0)")
+    parser.add_argument("--version", default=DEFAULT_VERSION, help=f"Release version tag (e.g. {DEFAULT_VERSION})")
     args = parser.parse_args(argv)
     build_release(version=args.version)
     return 0

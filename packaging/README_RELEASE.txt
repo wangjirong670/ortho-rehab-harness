@@ -1,26 +1,28 @@
 ================================================================================
-OrthoRehab-TCM-Harness 临床医生 3 分钟上手卡（Windows 绿色免安装版）
+OrthoRehab-TCM-Harness v0.3.0 原生桌面版上手指南（Windows 绿色免安装版）
 ================================================================================
+
+v0.3.0 起已全面升级为 **PyWebView + FastAPI + React/Vite 单窗口一体原生桌面工作台**
+（旧版双网页 Tkinter/Streamlit 启动器已正式弃用）。
 
 一、首次启动与 Windows SmartScreen 拦截处理
 1. 请先将压缩包**完整解压**至本地目录（如 D:\OrthoRehab-TCM-Harness\），切勿直接在压缩包
    预览窗口中双击运行。
 2. 首次双击 OrthoRehab-TCM-Harness.exe 若弹出蓝色「Windows 已保护你的电脑」提示：
    -> 点击「更多信息」 -> 再点击「仍要运行」即可（开源未购商业代码签名证书属正常现象）。
-3. 首次打开且目录中无 .env 文件时，桌面控制面板会默认勾选「离线 Mock 演示模式」，无需
-   API Key 或联网即可 0 配置体验全流程。
+3. 双击后将直接弹出原生桌面工作台窗口，集成「骨伤/康复临床副驾」「红队安全评测沙箱」
+   「知识库速查」「模型与连接设置」四大模块，关闭窗口即自动停机、零残留进程。
 
-二、3 步快速体验（推荐首测 3 类临床典型病例）
-1. 点击「🩺 启动骨伤/康复桌面副驾 (8501)」，浏览器自动打开后可在左侧边栏一键填充并试跑：
-   - 病例 A（手法红旗拦截）：颈肩僵硬伴「踩棉花感/扣纽扣不灵」→ 强制阻断颈椎旋转扳法；
-   - 病例 B（跨诊次抗凝冲突）：半年前心内科利伐沙班未停药 + 家属要求加服三七粉/跌打丸/布洛芬；
-   - 病例 C（防过度拒答校准）：ACL 重建术后第 16 周已获主刀准予直线慢跑，不机械沿用早期禁跑旧医嘱。
-2. 点击「🛡️ 启动红队安全评测沙箱 (8502)」，可对比裸模型与 Harness 护栏在 20 题红队陷阱上的差距。
-3. 关闭桌面控制面板主窗口时，已启动的后台服务会自动干净退出。
+二、3 步零配置体验（离线 Mock 模式，推荐首测 3 类典型病例）
+首次使用若目录内无 .env（或 .env 中为 Mock），可在右上角/设置页开启离线 Mock 演示模式，
+或直接体验以下 3 类典型临床用例：
+- 病例 A（手法红旗拦截）：颈肩僵硬伴「踩棉花感/扣纽扣不灵」→ 强制阻断颈椎旋转扳法；
+- 病例 B（跨诊次抗凝冲突）：半年前心内科利伐沙班未停药 + 家属要求加服三七粉/跌打丸/布洛芬；
+- 病例 C（防过度拒答校准）：ACL 重建术后第 16 周已获主刀准予直线慢跑，不机械沿用早期禁跑旧医嘱。
 
 三、接入真实大模型（DeepSeek 云端 / 本地 Ollama 隐私部署）
-推荐直接在桌面控制面板点击「⚙️ 模型与连接向导」完成可视化配置、连通性测试与一键保存；
-也可点击「📝 用记事本编辑 .env」手动修改同级目录下的 .env 文件：
+推荐直接在桌面工作台内的「设置 / 模型连接」页面完成向导配置、连通性测试与保存；
+也可手动复制 .env.example 为同级 .env 后修改：
 
   [方式 A：DeepSeek 云端 API]
   COPILOT_DEFAULT_MODEL=deepseek/deepseek-chat
@@ -29,37 +31,37 @@ OrthoRehab-TCM-Harness 临床医生 3 分钟上手卡（Windows 绿色免安装�
 
   [方式 B：本地 Ollama 离线隐私部署（病历不出内网）]
   1) 安装 Ollama 后在终端执行：ollama pull qwen2.5:7b
-  2) 在向导中选择「本地 Ollama」（或写入 .env）：
+  2) 在 .env 或工作台设置页配置：
      COPILOT_DEFAULT_MODEL=ollama_chat/qwen2.5:7b
      OLLAMA_API_BASE=http://localhost:11434
      LLM_TIMEOUT_SECONDS=180
      LLM_MOCK_MODE=false
-  * 注：在界面取消勾选「离线 Mock 演示模式」后重启副驾/沙箱，.env 新配置立即生效。
 
-四、目录说明
-- OrthoRehab-TCM-Harness.exe  桌面控制面板主程序
-- _internal/                  内置运行环境与共享医学规则库（请勿随意删改）
+四、命令行高级启动参数
+- 原生桌面窗口（默认）：OrthoRehab-TCM-Harness.exe
+- 浏览器模式启动：      OrthoRehab-TCM-Harness.exe --browser [--port 8000] [--mock]
+- 仅启动后端 API 服务： OrthoRehab-TCM-Harness.exe --server-only [--host 127.0.0.1] [--port 8000] [--mock]
+- 环境与路由自检：      OrthoRehab-TCM-Harness.exe --check   （兼容 --check-env）
+
+五、目录说明
+- OrthoRehab-TCM-Harness.exe  原生桌面工作台主程序
+- _internal/                  内置后端、编译后前端静态资源 (frontend/dist/) 与共享医学规则库
 - .env.example / .env         模型配置文件模板与用户实际配置（位于 exe 同级）
-- results/                    红队评测 JSON 报告默认保存目录
-- logs/                       副驾与沙箱后台运行日志（copilot.log / benchmark.log）
+- results/                    红队评测 JSON 报告自动保存目录
+- custom_cases/               用户自定义红队病例 YAML 保存目录
+- logs/                       启动异常诊断日志（desktop_app.log）
 
-五、常见报错与排查 Q&A
-Q1：提示“端口 8501/8502 已被占用”怎么办？
-A：启动器会自动探测并顺延至下一个空闲端口（如 8511/8512），面板状态栏与「打开页面」
-   按钮会自动同步为实际端口，无需手动杀进程。
+六、常见报错与排查 Q&A
+Q1：双击后无窗口弹出或提示“桌面工作台启动失败”？
+A：请检查同级 logs/desktop_app.log 错误详情，或运行 `OrthoRehab-TCM-Harness.exe --check`；
+   Windows 10 老版本若缺少 Microsoft Edge WebView2 Runtime，可安装微软官方 WebView2
+   或使用 `--browser` 参数通过系统默认浏览器打开。
 
-Q2：点击启动后弹出“服务意外退出”或日志报错？
-A：请查看弹窗中展示的 logs/*.log 末尾 15 行，或点击「🩺 环境自检」确认内置知识库完整；
-   若开启了本地安全软件拦截，请放行本程序访问本地回环地址 127.0.0.1。
+Q2：使用 Ollama 提示连接失败或超时？
+A：请确认右下角托盘 Ollama 已启动且已执行 `ollama pull qwen2.5:7b`，并确保模型名带
+   `ollama_chat/` 前缀且 `LLM_TIMEOUT_SECONDS=180`。
 
-Q3：使用 Ollama 提示连接失败或超时？
-A：请确认右下角托盘 Ollama 已启动且已执行 `ollama pull qwen2.5:7b`，并确保 `.env` 中
-   模型名带 `ollama_chat/` 前缀且 `LLM_TIMEOUT_SECONDS=180`。
-
-Q4：修改 `.env` 里的 API Key 后为什么不生效？
-A：请在控制面板「停止」对应服务并重新「启动」，启动器会用最新 `.env` 强制刷新子进程环境。
-
-六、医疗安全与合规边界声明
+七、医疗安全与合规边界声明
 - 本软件定位为医学教育、红队安全评测研究与脱敏临床文本辅助整理工具，不接入任何医院
   HIS/EMR 系统，不构成医疗器械，严禁直接面向患者下达医疗诊断或开具处方。
 - 内置知识库规则均需由执业中医骨伤科、康复科或临床药学医师审校核对后使用。

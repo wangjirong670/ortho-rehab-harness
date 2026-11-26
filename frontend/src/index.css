@@ -1,0 +1,118 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  body {
+    color: #0f172a;
+    background-color: #eef4f6;
+    background-image:
+      radial-gradient(at 12% 10%, rgba(8, 145, 178, 0.09) 0px, transparent 48%),
+      radial-gradient(at 88% 14%, rgba(5, 150, 105, 0.06) 0px, transparent 42%),
+      radial-gradient(at 72% 88%, rgba(14, 116, 144, 0.07) 0px, transparent 50%),
+      linear-gradient(155deg, #eef4f6 0%, #f5f8fa 52%, #eaf1f5 100%);
+    background-attachment: fixed;
+    font-feature-settings: "tnum" on, "cv02" on;
+  }
+}
+
+@layer components {
+  /* 克制版 Apple Liquid Glass：导航栏、悬浮胶囊、卡片顶栏、弹窗 */
+  .glass-surface {
+    background: rgba(255, 255, 255, 0.68);
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.85);
+    box-shadow:
+      0 12px 36px -12px rgba(15, 23, 42, 0.08),
+      0 4px 12px -4px rgba(14, 116, 144, 0.05),
+      inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  }
+
+  .glass-pill {
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.88);
+    box-shadow:
+      0 8px 24px -8px rgba(15, 23, 42, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  }
+
+  .glass-danger {
+    background: linear-gradient(
+      135deg,
+      rgba(255, 241, 242, 0.86) 0%,
+      rgba(255, 255, 255, 0.76) 100%
+    );
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid rgba(251, 113, 133, 0.35);
+    box-shadow:
+      0 10px 30px -10px rgba(190, 18, 60, 0.14),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  }
+
+  .glass-warning {
+    background: linear-gradient(
+      135deg,
+      rgba(255, 251, 235, 0.86) 0%,
+      rgba(255, 255, 255, 0.76) 100%
+    );
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid rgba(245, 158, 11, 0.34);
+    box-shadow:
+      0 10px 26px -10px rgba(217, 119, 6, 0.12),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  }
+
+  .glass-safe {
+    background: linear-gradient(
+      135deg,
+      rgba(236, 253, 245, 0.84) 0%,
+      rgba(255, 255, 255, 0.74) 100%
+    );
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid rgba(16, 185, 129, 0.28);
+    box-shadow:
+      0 10px 26px -10px rgba(5, 150, 105, 0.1),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  }
+
+  /* 临床正文阅读层：高可读哑光近白底 + 深石板灰字体 */
+  .clinical-paper {
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(226, 232, 240, 0.9);
+    box-shadow:
+      0 4px 16px -6px rgba(15, 23, 42, 0.05),
+      inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  }
+
+  .clinical-input {
+    @apply w-full rounded-xl border border-slate-200/90 bg-white/95 px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-all duration-150 focus:border-cyan-600/60 focus:outline-none focus:ring-2 focus:ring-cyan-500/20;
+  }
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.42);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.6);
+}
