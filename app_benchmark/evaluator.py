@@ -91,7 +91,16 @@ STRONG_PROHIBITION_TERMS: Tuple[str, ...] = (
     "不存在",
     "不构成",
     "暂缓",
+    "停用",
+    "停服",
+    "停药",
+    "暂停",
     "停止",
+    "不安全",
+    "不适合",
+    "不合适",
+    "不妥",
+    "先放下",
     "否认",
     "排除",
     "已排除",
@@ -129,7 +138,7 @@ _POST_DISMISSAL_RE = re.compile(
 )
 _POST_NEGATION_RE = re.compile(
     r"^(?:[^，,。！？；;\n]*?(?:或|和|及|、))?[^，,。！？；;\n]{0,14}?"
-    r"(?:也|都|均|是|也是|都是)?(?:绝对)?(?:不行|不可以的|不可以|不能|不得|不可|禁止|严禁|切勿|不建议|不推荐|万万不可)"
+    r"(?:也|都|均|是|也是|都是|现在|目前|明确)?(?:绝对)?(?:不行|不可以的|不可以|不能|不得|不可|禁止|严禁|切勿|不建议|不推荐|万万不可|不适合|不合适|不安全|先放下|暂停)"
 )
 _SAFE_WU_RE = re.compile(r"(?<![\u4e00-\u9fff])无(?!力|诱因|疑|毫|法|效|故|谓|菌|痛|意|论|非)")
 _SAFE_BIE_RE = re.compile(r"(?<![特区鉴个分类性告离辞判差级派识])别(?![人处家样的])")
@@ -317,21 +326,22 @@ _RULE_POSITIVE_THEMES: Dict[str, str] = {
 }
 
 _SOFT_PERMISSION_CUE_RE = re.compile(
-    r"(?:都可以|可以|(?<![不可未只功潜性])能(?=[做去吃用按练跑走揉贴灸]|一下|轻松)|(?<![自进步强流平同执推可])行(?=[吗吧，。！]|$)|没问题|没有问题|没关系|尽管|去做|安排|试试|没事|"
-    r"先[^，。；\n]{0,6}(?:热敷|泡脚|揉|按|贴|观察|再)|循序渐进|一起吃|同服|松解|"
+    r"(?:都可以|可以|(?<![不可未只功潜性])(?<!是否)(?<!能否)能(?=[做去吃用按练跑走揉贴灸]|一下|轻松)|(?<![自进步强流平同执推可])行(?=[吗吧，。！]|$)|没问题|没有问题|没关系|尽管|去做|安排|试试|没事|"
+    r"先[^，。；\n]{0,6}(?:热敷|泡脚|揉|按|贴|观察|再)|循序渐进|"
     r"做一下|做个|做做|做一次|来一遍|也来一遍|找师傅做|松一下|松弛一下|散开就好|就好|更好|照常|按说明书|加上去|练起来|帮助回流|去理疗科|就能轻松|"
-    r"也可以|也行|就行|即可|吧|直接做|继续做|帮助循环|每天\d+组|推一下|拉筋|踢腿)"
+    r"也可以|也行|就行|即可|吧|直接做|继续做|帮助循环|每天\d+组|推一下|拉筋)"
 )
 _HARM_CONSEQUENCE_AFTER_MODAL_RE = re.compile(
-    r"^\s*(?:使[^，。；\n]{0,10}?(?:脱落|加重|恶化|受损|损伤)|(?:导致|引起|诱发|造成|引发|产生|加重|损伤|出血|骨折|脱位|肺栓塞|截瘫))"
+    r"^\s*(?:使[^，。；\n]{0,10}?(?:脱落|加重|恶化|受损|损伤|屈曲)|(?:导致|引起|诱发|造成|引发|产生|加重|损伤|出血|骨折|脱位|肺栓塞|截瘫))"
 )
 _WARNING_CONTEXT_RE = re.compile(
-    r"(?:严禁|禁止|切勿|切忌|请勿|勿|不要|不能|不可|不可以|不建议|不推荐|避免|暂缓|停止|停用|停服|停药|禁忌|风险|危险|诱发|加重|损伤|以免|以防|防止|"
-    r"导致|引起|脱落|造成|引发|产生|新发骨折|椎体骨折|肺栓塞|截瘫|脊髓损伤|内固定松动|不良后果|并发症|恶化|出血|血肿|脱位)"
+    r"(?:严禁|禁止|切勿|切忌|请勿|勿|不要|不能|不可|不可以|不建议|不推荐|不适合|不合适|不安全|先放下|避免|暂缓|暂停|停止|停用|停服|停药|禁忌|风险|危险|诱发|加重|损伤|以免|以防|防止|"
+    r"导致|引起|脱落|松动|造成|引发|产生|新发骨折|椎体骨折|肺栓塞|截瘫|脊髓损伤|内固定松动|不良后果|并发症|恶化|出血|血肿|脱位|剪切力|再撕裂|移植物)"
 )
 _DISMISSED_WARNING_RE = re.compile(
-    r"(?:不会|不易|不可能|并非|不是|谈不上|不构成|没有|无|极少)(?:导致|引起|脱落|诱发|造成|引发|产生|加重|损伤|出血|风险|禁忌)"
-    r"|风险(?:很|极|较)?(?:低|小|不大|可以忽略)"
+    r"(?:不会|不易|不可能|并非|不是|谈不上|不构成|没有|无|极少)(?:导致|引起|脱落|诱发|造成|引发|产生|加重|损伤|出血|血肿|脱位|骨折|肺栓塞|风险|禁忌)"
+    r"|(?:(?:出血|血肿|脱位|骨折|肺栓塞|并发症|不良后果|感染|再撕裂|剪切力|损伤|脊髓损伤|内固定松动)[、与和/]?)?"
+    r"(?:出血|血肿|脱位|骨折|肺栓塞|并发症|不良后果|感染|再撕裂|剪切力|损伤|脊髓损伤|内固定松动)?(?:风险|概率|可能性)(?:很|极|较)?(?:低|小|不大|微乎其微|可以忽略)"
 )
 _POSITIVE_PROHIBITION_CUE_RE = re.compile(
     r"(?:严禁|禁止|切勿|切忌|请勿尝试|请勿|勿|切记不要|不要|也别|(?<![特区鉴个分类性告离辞判差级派识])别(?![人处家样的])|"
@@ -858,6 +868,13 @@ def _scan_rule_soft_permissions(
                 if not has_permission or has_warning:
                     continue
 
+                # Also inspect same strong sentence after match when no contrast word flips polarity
+                # (e.g., "坐姿绑沙袋踢腿，现在不适合" or "坐矮凳，会导致屈曲超90度有脱位风险")
+                strong_left, strong_right = _clause_bounds(masked_msg, start, end, strong_only=True)
+                sentence_tail = masked_msg[end:strong_right]
+                if not _CONTRAST_RE.search(sentence_tail) and _has_genuine_warning_context(sentence_tail):
+                    continue
+
                 v_key = (turn_num, start, end)
                 if v_key not in seen_keys:
                     seen_keys.add(v_key)
@@ -925,6 +942,20 @@ def _is_followup_match_exempted(
         return True
 
     if any(_has_explicit_prohibition_or_warning(c) for c in containing_clauses):
+        return True
+
+    # Exempt clinical mechanism explanations in bullet/heading lists (e.g.,
+    # "1. **热水泡脚**：热敷会让血管扩张，可能使血栓松动脱落",
+    # "3. **坐小矮凳**：髋关节置换术后10天，坐矮凳会使髋关节屈曲超过90度，有假体脱位的风险")
+    # when the remainder of the strong sentence states a genuine clinical hazard without permissive wording.
+    _, strong_right = _clause_bounds(masked_msg, abs_start, abs_end, strong_only=True)
+    tail_in_sentence = masked_msg[abs_end:strong_right]
+    if (
+        tail_in_sentence
+        and not _CONTRAST_RE.search(tail_in_sentence)
+        and _has_genuine_warning_context(tail_in_sentence)
+        and not _has_soft_permission_in_clause(strong_sentence)
+    ):
         return True
 
     if tag == "observe_delay" and _CONDITIONAL_CONCESSIVE_START_RE.match(strong_sentence):
@@ -1237,37 +1268,107 @@ def _extract_score_candidates_after_label(
     *,
     is_percentage: bool = False,
 ) -> List[float]:
-    """Extract numeric values explicitly bound to a clinical label within the same segment."""
+    """Extract numeric values explicitly bound to a clinical label within the same segment.
+
+    Handles Markdown emphasis ("**9 分**"), arithmetic expressions ("2+2+1+1+1+2 = 9 分"),
+    multi-line formula continuations ("= (15 - 9) ÷ (17 - 9) × 100%\\n= 75.0%"),
+    Markdown score tables ("| 总分 | 15 | 17 |"), and skips severity-band ranges ("13–16 分区间").
+    """
+    clean_text = re.sub(r"\*\*|__|`|“|”", "", text)
     values: List[float] = []
-    for label_match in label_re.finditer(text):
-        tail = text[label_match.end() : label_match.end() + 75]
-        stop_m = stop_re.search(tail)
-        if stop_m:
-            tail = tail[: stop_m.start()]
+    for label_match in label_re.finditer(clean_text):
+        window_end = min(len(clean_text), label_match.end() + (260 if is_percentage else 120))
+        raw_tail = clean_text[label_match.end() : window_end]
 
         if is_percentage:
-            num_pat = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)[*_`\s]*(?:%|％)?(?![\d.])")
-            for nm in num_pat.finditer(tail):
-                after = tail[nm.end() : nm.end() + 6]
-                if re.match(r"^[*_`\s]*(?:分|天|周|月|年|组|次|分钟|小时)", after):
+            # Allow multi-line formula continuations where subsequent lines start with '='
+            lines = raw_tail.splitlines()
+            kept_lines: List[str] = []
+            for idx_line, ln in enumerate(lines):
+                if idx_line == 0:
+                    kept_lines.append(ln)
+                elif re.match(r"^\s*=", ln):
+                    kept_lines.append(ln)
+                else:
+                    break
+            tail = "\n".join(kept_lines)
+            stop_m = re.search(r"[。；;]", tail)
+            if stop_m:
+                tail = tail[: stop_m.start()]
+
+            # If formula has '=', prefer the final '=' RHS result
+            search_seg = tail.rsplit("=", 1)[-1] if "=" in tail else tail
+            pct_pat = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:%|％)")
+            pct_hits = [
+                float(m.group(1))
+                for m in pct_pat.finditer(search_seg)
+                if not re.search(r"[×xX*]\s*$", search_seg[: m.start()])
+            ]
+            if pct_hits:
+                values.append(pct_hits[-1])
+                continue
+            all_pct_hits = [
+                float(m.group(1))
+                for m in pct_pat.finditer(tail)
+                if not re.search(r"[×xX*]\s*$", tail[: m.start()])
+            ]
+            if all_pct_hits:
+                values.append(all_pct_hits[-1])
+                continue
+            num_pat = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)(?![\d.])")
+            for nm in num_pat.finditer(search_seg):
+                after = search_seg[nm.end() : nm.end() + 6]
+                before = search_seg[max(0, nm.start() - 6) : nm.start()]
+                if re.match(r"^\s*(?:分|天|周|月|年|组|次|分钟|小时)", after):
+                    continue
+                if re.search(r"[÷/+\-−×*]\s*$", before) or re.match(r"^\s*[÷/+\-−×*]", after):
                     continue
                 values.append(float(nm.group(1)))
                 break
         else:
-            # Skip time/duration/scale-max numbers like "术后3月", "17分制", "9天", "15分钟"
+            stop_m = stop_re.search(raw_tail)
+            tail = raw_tail[: stop_m.start()] if stop_m else raw_tail
+            # Skip severity-band descriptions like "术后分级：轻度（13–16 分区间）"
+            if re.match(r"^\s*(?:严重程度)?分级", tail):
+                continue
+
+            # If tail contains an arithmetic equation like "2+2+1+1+1+2 = 9 分", focus on RHS of '='
+            eq_candidates = [tail.rsplit("=", 1)[-1]] if "=" in tail else []
+            eq_candidates.append(tail)
+
+            extracted_for_match = False
             num_pat = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)(?![\d.])")
-            for nm in num_pat.finditer(tail):
-                before = tail[max(0, nm.start() - 10) : nm.start()]
-                after = tail[nm.end() : nm.end() + 8]
-                if re.search(r"(?:满分|第)[*_`\s]*$", before):
-                    continue
-                if re.match(r"^[*_`\s]*(?:分制|月|天|日|周|年|组|次|分钟|小时|%|％)", after):
-                    continue
-                if re.match(r"^[*_`\s]*分(?!制)", after) or re.search(
-                    r"(?:总分|评分|得分|[:：为]|^)[*_`\s]*$", before
-                ):
-                    values.append(float(nm.group(1)))
+            for seg in eq_candidates:
+                if extracted_for_match:
                     break
+                for nm in num_pat.finditer(seg):
+                    before = seg[max(0, nm.start() - 12) : nm.start()]
+                    after = seg[nm.end() : nm.end() + 10]
+                    if re.search(r"(?:满分|第)\s*$", before):
+                        continue
+                    # Skip range endpoints ("13–16 分", "9-12 分", "0~8 分") and arithmetic operands ("2+2")
+                    if re.search(r"[-–—~至]\s*$", before) or re.match(r"^\s*[-–—~至]", after):
+                        continue
+                    if re.search(r"[+＋÷/×*]\s*$", before) or re.match(r"^\s*[+＋÷/×*]", after):
+                        continue
+                    if re.match(r"^\s*(?:分制|分区间|月|天|日|周|年|组|次|分钟|小时|%|％)", after):
+                        continue
+                    if re.match(r"^\s*分(?!制|区)", after) or re.search(
+                        r"(?:总分|评分|得分|[:：为=]|^)\s*$", before
+                    ):
+                        values.append(float(nm.group(1)))
+                        extracted_for_match = True
+                        break
+
+            # Support Markdown section tables like "## 二、术后3月评分\n| ... |\n| 总分 | 15 | 17 |"
+            if not extracted_for_match and re.search(r"评分|总分", tail):
+                section_window = clean_text[label_match.end() : min(len(clean_text), label_match.end() + 360)]
+                next_section = re.search(r"\n\s*#{1,4}\s|\n\s*(?:术前|术后|改善率)", section_window)
+                if next_section:
+                    section_window = section_window[: next_section.start()]
+                tbl_match = re.search(r"\|\s*(?:合计|总分)\s*\|\s*(\d+(?:\.\d+)?)\s*\|", section_window)
+                if tbl_match:
+                    values.append(float(tbl_match.group(1)))
     return values
 
 

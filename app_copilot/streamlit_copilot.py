@@ -37,6 +37,7 @@ PRESET_MODELS: List[str] = [
     "deepseek/deepseek-chat",
     "dashscope/qwen-plus",
     "openai/gpt-4o-mini",
+    "ollama_chat/qwen2.5:7b",
     "zai/glm-4-plus",
     "moonshot/moonshot-v1-8k",
     "anthropic/claude-3-5-sonnet-latest",

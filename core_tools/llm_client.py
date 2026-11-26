@@ -47,6 +47,8 @@ _PROVIDER_API_BASE_ENV_MAP: Dict[str, Tuple[str, ...]] = {
     "moonshot": ("MOONSHOT_API_BASE",),
     "anthropic": ("ANTHROPIC_API_BASE",),
     "gemini": ("GEMINI_API_BASE",),
+    "ollama": ("OLLAMA_API_BASE",),
+    "ollama_chat": ("OLLAMA_API_BASE", "OLLAMA_CHAT_API_BASE"),
 }
 
 
@@ -131,21 +133,22 @@ def _resolve_api_base(
         explicit = call_kwargs_overrides["api_base"]
         return str(explicit).strip() if explicit else None
 
+    normalized = (chosen_model or "").strip().lower()
+    provider = normalized.split("/", 1)[0].strip() if "/" in normalized else ""
+
+    if provider:
+        env_names = _PROVIDER_API_BASE_ENV_MAP.get(provider)
+        if env_names is None and not _is_openai_compatible_model(chosen_model) and re.fullmatch(r"[a-z0-9_]+", provider):
+            env_names = (f"{provider.upper()}_API_BASE",)
+        for env_name in env_names or ():
+            val = os.getenv(env_name)
+            if val and val.strip():
+                return val.strip()
+
     if _is_openai_compatible_model(chosen_model):
         candidate = config_api_base or os.getenv("OPENAI_API_BASE") or None
         return str(candidate).strip() if candidate else None
 
-    normalized = (chosen_model or "").strip().lower()
-    provider = normalized.split("/", 1)[0].strip() if "/" in normalized else ""
-    if not provider:
-        return None
-    env_names = _PROVIDER_API_BASE_ENV_MAP.get(provider)
-    if env_names is None and re.fullmatch(r"[a-z0-9_]+", provider):
-        env_names = (f"{provider.upper()}_API_BASE",)
-    for env_name in env_names or ():
-        val = os.getenv(env_name)
-        if val and val.strip():
-            return val.strip()
     return None
 
 

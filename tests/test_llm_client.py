@@ -109,6 +109,8 @@ def test_api_base_not_leaked_to_other_providers(monkeypatch) -> None:
         "MOONSHOT_API_BASE",
         "ANTHROPIC_API_BASE",
         "GEMINI_API_BASE",
+        "OLLAMA_API_BASE",
+        "OLLAMA_CHAT_API_BASE",
     ):
         monkeypatch.delenv(env_var, raising=False)
 
@@ -484,3 +486,25 @@ def test_mock_n3_preserves_p03_isolation_negation_and_resume_boundaries(monkeypa
     assert meds_w2["华法林"]["stopped_days_ago"] == 2.0
     rep_w2 = scan_clinical_risks(raw_text=warfarin_2d, structured_facts=ext_w2["structured_facts"])
     assert any(a["rule_id"] == "DC_001" for a in rep_w2["alerts"])
+
+
+def test_ollama_api_base_takes_precedence_over_openai_api_base(monkeypatch) -> None:
+    captured_calls = []
+
+    def _fake_completion(**kwargs):
+        captured_calls.append(kwargs)
+        msg = types.SimpleNamespace(content="ok")
+        choice = types.SimpleNamespace(message=msg)
+        return types.SimpleNamespace(choices=[choice], usage=None)
+
+    fake_litellm = types.SimpleNamespace(completion=_fake_completion)
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    monkeypatch.setenv("OPENAI_API_BASE", "https://relay.example.com/v1")
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://localhost:11434")
+
+    client = LLMClient(config=LLMConfig.from_env())
+    for model_name in ("ollama_chat/qwen2.5:7b", "ollama/qwen2.5:7b"):
+        captured_calls.clear()
+        client.chat_completion([{"role": "user", "content": "hi"}], model=model_name, mock_mode=False)
+        assert len(captured_calls) == 1
+        assert captured_calls[0].get("api_base") == "http://localhost:11434"
