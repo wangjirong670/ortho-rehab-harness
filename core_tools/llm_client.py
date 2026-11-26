@@ -367,7 +367,7 @@ def _extract_section_field(clean_text: str, prefixes: tuple[str, ...]) -> Option
 
 def _split_clinical_visits(clean_text: str) -> List[Dict[str, str]]:
     """Split multi-visit longitudinal notes into chronological visit segments."""
-    header_re = re.compile(r"【([^】]{2,40})】")
+    header_re = re.compile(r"【([^】]{1,40})】")
     headers = list(header_re.finditer(clean_text))
     if headers:
         visits: List[Dict[str, str]] = []
@@ -376,16 +376,146 @@ def _split_clinical_visits(clean_text: str) -> List[Dict[str, str]]:
             body_start = match.end()
             body_end = headers[idx + 1].start() if idx + 1 < len(headers) else len(clean_text)
             body = clean_text[body_start:body_end].strip()
-            visits.append({"header": hdr_text, "body": body, "full": f"【{hdr_text}】{body}".strip()})
+            visits.append(
+                {
+                    "header": hdr_text,
+                    "body": body,
+                    "full": f"【{hdr_text}】{body}".strip(),
+                    "start": match.start(),
+                    "end": body_end,
+                }
+            )
         return visits
 
     # Fallback: split by explicit lines or sentences with date/time markers
     visits = []
+    pos = 0
     for raw_line in re.split(r"[\n]+", clean_text):
         line = raw_line.strip()
         if line:
-            visits.append({"header": "", "body": line, "full": line})
-    return visits or [{"header": "", "body": clean_text, "full": clean_text}]
+            line_start = clean_text.find(line, pos)
+            if line_start == -1:
+                line_start = pos
+            line_end = line_start + len(line)
+            visits.append(
+                {
+                    "header": "",
+                    "body": line,
+                    "full": line,
+                    "start": line_start,
+                    "end": line_end,
+                }
+            )
+            pos = line_end
+    return visits or [{"header": "", "body": clean_text, "full": clean_text, "start": 0, "end": len(clean_text)}]
+
+
+_CURRENT_VISIT_HDR_RE = re.compile(
+    r"(?:今日|今天|本次|今晨|今晚|目前|当前|昨晚至今|最新|(?<![出表发实呈再重])现(?=$|[\s,，:：]))"
+)
+_PAST_VISIT_HDR_RE = re.compile(r"(?:既往|过去|以前|早年|陈旧)")
+_ABS_DATE_HDR_RE = re.compile(r"(\d{4})[-/.年](\d{1,2})(?:[-/.月](\d{1,2})日?)?")
+_POSTOP_HDR_RE = re.compile(
+    r"(?:术后\s*第?\s*(\d+(?:\.\d+)?)\s*(天|日|周|个?月|年)|第\s*(\d+(?:\.\d+)?)\s*(周|天|日))"
+)
+_NON_DRUG_GROUP_LABEL_RE = re.compile(r"(?:操作|手法|理疗|有创|剥离|松解)")
+_NON_DRUG_EXACT_TERMS: FrozenSet[str] = frozenset(
+    {
+        "小针刀",
+        "针刀",
+        "封闭",
+        "局封",
+        "关节腔注射",
+        "拔罐",
+        "刺络",
+        "放血",
+        "穿刺",
+        "银质针",
+        "浮针",
+        "水针",
+        "强力推拿",
+        "大力推拿",
+        "强力松解",
+        "皮肤破溃",
+        "开放性伤口",
+        "长期服用",
+        "连服数月",
+        "肝肾功能不全",
+        "饮酒",
+    }
+)
+
+
+def _parse_visit_time_key(visit: Dict[str, Any]) -> Optional[Tuple[int, float]]:
+    """Parse block-level temporal semantics into a comparable (tier, value) key (larger = later)."""
+    header = str(visit.get("header") or "").strip()
+    body = str(visit.get("body") or "").strip()
+    src = header if header else body[:24]
+    if not src:
+        return None
+
+    abs_m = _ABS_DATE_HDR_RE.search(src)
+    if abs_m:
+        y = int(abs_m.group(1))
+        mo = int(abs_m.group(2))
+        d = int(abs_m.group(3) or 15)
+        return (2, float(y * 10000 + mo * 100 + d))
+
+    postop_m = _POSTOP_HDR_RE.search(src)
+    if postop_m:
+        num = float(postop_m.group(1) or postop_m.group(3))
+        unit = postop_m.group(2) or postop_m.group(4) or "天"
+        if "年" in unit:
+            days = num * 365.0
+        elif "月" in unit:
+            days = num * 30.0
+        elif "周" in unit:
+            days = num * 7.0
+        else:
+            days = num
+        return (3, days)
+
+    if _CURRENT_VISIT_HDR_RE.search(src):
+        return (4, 0.0)
+
+    if "昨日" in src or "昨天" in src:
+        return (1, -1.0)
+    if "前天" in src:
+        return (1, -2.0)
+
+    if re.search(r"(?:前|半年前)", src):
+        dur_days = parse_duration_days(src)
+        if dur_days is not None:
+            return (1, -float(dur_days))
+
+    if _PAST_VISIT_HDR_RE.search(src):
+        return (0, 0.0)
+
+    return None
+
+
+def _resolve_symptom_polarity_across_visits(
+    visit_records: List[Tuple[Optional[Tuple[int, float]], bool]],
+) -> Optional[str]:
+    """Resolve symptom polarity across visits; default conservatively to 'present' if timing is ambiguous."""
+    if not visit_records:
+        return None
+    has_present = any(is_present for _, is_present in visit_records)
+    has_absent = any(not is_present for _, is_present in visit_records)
+    if not has_present:
+        return "absent"
+    if not has_absent:
+        return "present"
+
+    # Both present and absent exist: only return 'absent' when every record has comparable
+    # temporal semantics and the strictly latest visit(s) are all 'absent'.
+    if any(t_key is None for t_key, _ in visit_records):
+        return "present"
+    max_time_key = max(t_key for t_key, _ in visit_records if t_key is not None)
+    latest_present = any(is_present for t_key, is_present in visit_records if t_key == max_time_key)
+    if latest_present:
+        return "present"
+    return "absent"
 
 
 def _detect_department(text: str) -> str:
@@ -451,7 +581,7 @@ def _extract_timeline_events_mock(clean_text: str) -> List[Dict[str, str]]:
         r"(\d{4}[-/.年]\d{1,2}(?:[-/.月]\d{1,2}日?)?|\d+个?[天周月年]前|半年前|昨日|今日(?:复诊)?|本周|近\d+个?[天周月]|术后第?\d+[天周月]|第\d+周)"
     )
 
-    header_re = re.compile(r"【([^】]{2,40})】")
+    header_re = re.compile(r"【([^】]{1,40})】")
     if header_re.search(clean_text):
         for visit in _split_clinical_visits(clean_text):
             hdr = visit["header"]
@@ -517,7 +647,7 @@ def _mock_extract_clinical_facts(user_text: str) -> Dict[str, Any]:
     dc_catalog = load_drug_conflicts_catalog()
     visits = _split_clinical_visits(clean_text)
 
-    # Chronological symptom polarity resolution: latest visit mention overrides earlier polarity
+    # Chronological symptom polarity resolution with block-level temporal semantics and conservative tie-breaking
     symptoms: List[Dict[str, str]] = []
     seen_symptoms = set()
     for rule in rf_catalog.rules:
@@ -526,7 +656,7 @@ def _mock_extract_clinical_facts(user_text: str) -> Dict[str, Any]:
             pattern_str = kw[6:] if is_regex_kw else re.escape(kw)
             if not is_regex_kw and kw in seen_symptoms:
                 continue
-            latest_polarity: Optional[str] = None
+            visit_records: List[Tuple[Optional[Tuple[int, float]], bool]] = []
             matched_sym_name: str = kw
             for visit in visits:
                 seg_text = visit["full"]
@@ -537,6 +667,7 @@ def _mock_extract_clinical_facts(user_text: str) -> Dict[str, Any]:
                 if not seg_matches:
                     continue
                 seg_present = False
+                seg_has_valid_match = False
                 for match in seg_matches:
                     matched_sym_name = match.group(0) if is_regex_kw else kw
                     # Skip hypothetical questions about treatments (e.g., "询问能否做颈椎旋转正骨推拿")
@@ -550,6 +681,7 @@ def _mock_extract_clinical_facts(user_text: str) -> Dict[str, Any]:
                         and any(q in sent_slice for q in ("询问能否", "能否做", "可以做", "？", "?"))
                     ):
                         continue
+                    seg_has_valid_match = True
                     is_neg, _, _ = check_negation_context(
                         seg_text,
                         match.start(),
@@ -560,19 +692,25 @@ def _mock_extract_clinical_facts(user_text: str) -> Dict[str, Any]:
                     if not is_neg:
                         seg_present = True
                         break
-                latest_polarity = "present" if seg_present else "absent"
+                if seg_has_valid_match:
+                    visit_records.append((_parse_visit_time_key(visit), seg_present))
 
+            latest_polarity = _resolve_symptom_polarity_across_visits(visit_records)
             if latest_polarity is not None and matched_sym_name not in seen_symptoms:
                 seen_symptoms.add(matched_sym_name)
                 symptoms.append({"name": matched_sym_name, "polarity": latest_polarity})
 
-    # Build drug washout lookup from catalog
+    # Build drug washout lookup from catalog (exclude non-drug procedural/physical therapy groups)
     drug_washout_map: Dict[str, int] = {}
     all_drug_keywords: List[str] = []
     for conflict in dc_catalog.conflicts:
         for grp in (conflict.group_a, conflict.group_b):
+            if _NON_DRUG_GROUP_LABEL_RE.search(grp.label or ""):
+                continue
             w_days = grp.washout_window_days if grp.washout_window_days is not None else 0
             for kw in grp.keywords:
+                if not kw or kw in _NON_DRUG_EXACT_TERMS:
+                    continue
                 all_drug_keywords.append(kw)
                 drug_washout_map[kw.lower()] = max(drug_washout_map.get(kw.lower(), 0), w_days)
 
@@ -675,7 +813,7 @@ def _mock_extract_clinical_facts(user_text: str) -> Dict[str, Any]:
                 dur_src = re.sub(r"(?:已?规律服用|长期服用|已服用|连服|服用)\s*\d*[^，,。！？；;\n]{0,8}", "", local_snippet)
                 stopped_days = parse_duration_days(dur_src)
                 if stopped_days is None:
-                    # Only look forward within the same comma-clause and before any other drug or switch/taking verb
+                    # Look forward within the same comma-clause, then across commas in the same sentence
                     tail = clean_text[match.end() :]
                     boundary_m = re.search(r"[，,。！？；;\n]", tail)
                     forward_scope = tail[: boundary_m.start()] if boundary_m else tail
@@ -688,6 +826,31 @@ def _mock_extract_clinical_facts(user_text: str) -> Dict[str, Any]:
                         forward_scope = forward_scope[: sw_fwd.start()]
                     if not re.search(r"(?:规律服用|仍在服|继续服|恢复服用)", forward_scope):
                         stopped_days = parse_duration_days(forward_scope[:32])
+
+                if stopped_days is None:
+                    sent_tail_m = re.search(r"[。！？；;\n]", clean_text[match.end() :])
+                    sent_tail = (
+                        clean_text[match.end() : match.end() + sent_tail_m.start()]
+                        if sent_tail_m
+                        else clean_text[match.end() :]
+                    )
+                    if other_drugs_re:
+                        om_st = other_drugs_re.search(sent_tail)
+                        if om_st is not None:
+                            sent_tail = sent_tail[: om_st.start()]
+                    sw_st = switch_drug_re.search(sent_tail)
+                    if sw_st is not None:
+                        sent_tail = sent_tail[: sw_st.start()]
+                    if not re.search(r"(?:规律服用|仍在服|继续服|恢复服用)", sent_tail):
+                        stopped_days = parse_duration_days(sent_tail[:48])
+
+                if stopped_days is None:
+                    for visit in visits:
+                        if visit["start"] <= match.start() < visit["end"]:
+                            hdr = visit.get("header") or ""
+                            if hdr and re.search(r"(?:前|半年前)", hdr):
+                                stopped_days = parse_duration_days(hdr)
+                            break
 
             if is_stopped:
                 mention_states.append(

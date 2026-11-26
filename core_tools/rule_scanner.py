@@ -72,6 +72,7 @@ _LITERAL_NEGATION_OVERRIDES: Dict[str, re.Pattern[str]] = {
     "无": re.compile(r"(?<!毫)无(?!力|诱因|疑|毫|法|效|故|谓|菌|痛|非|论|需|须|怪|妨|奈|聊|辜|可|所谓)"),
     "无明显": re.compile(r"无明显(?!诱因)"),
     "排除": re.compile(r"(?<!待)(?<!未)(?<!需)(?<!不)(?<!难)排除"),
+    "未行": re.compile(r"未行(?!走)"),
 }
 
 # Double-negation patterns that force affirmative interpretation (e.g. "不排除马尾综合征", "尚不能排除")

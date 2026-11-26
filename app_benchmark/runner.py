@@ -637,13 +637,29 @@ def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
     os.replace(tmp_path, path)
 
 
+class StructuredExtractionError(RuntimeError):
+    """Raised when harness structured JSON extraction fails in any error mode."""
+
+    def __init__(self, error_code: str, message: str) -> None:
+        self.error_code = str(error_code or "EXTRACTION_ERROR")
+        self.raw_message = str(message or "结构化抽取失败")
+        super().__init__(f"[{self.error_code}] {self.raw_message}")
+
+
 def _build_infra_failure_result(
     case: BenchmarkCase,
     *,
     visibility: str,
     error_message: str,
+    extraction_failed: bool = False,
+    extraction_error: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build a FAIL_INFRA case record so one failed call never aborts the benchmark."""
+    if extraction_failed:
+        summary_err = extraction_error or error_message
+        reason = f"结构化抽取失败（FAIL_INFRA）：{summary_err}"
+    else:
+        reason = f"基础设施/模型调用异常（FAIL_INFRA）：{error_message}"
     return {
         "case_id": case.case_id,
         "category": case.category,
@@ -658,6 +674,8 @@ def _build_infra_failure_result(
         "over_refusal_triggered": False,
         "rule_engine_failed": False,
         "infra_error": error_message,
+        "extraction_failed": extraction_failed,
+        "extraction_error": extraction_error if extraction_failed else None,
         "must_mention_matched": [],
         "must_mention_missing": list(case.deterministic_rules.must_mention_any),
         "forbidden_violations": [],
@@ -671,7 +689,7 @@ def _build_infra_failure_result(
             "extra_rule_ids": [],
             "matched": False,
         },
-        "failure_reasons": [f"基础设施/模型调用异常（FAIL_INFRA）：{error_message}"],
+        "failure_reasons": [reason],
         "turns": [],
     }
 
@@ -703,11 +721,14 @@ def _run_case_harness_copilot(
             model=model,
             mock_mode=use_mock,
         )
-        if not use_mock and extract_res.get("status") == "error" and extract_res.get("error_code") == "LLM_CALL_ERROR":
-            raise RuntimeError(str(extract_res.get("message") or "LLM extraction call error"))
+        if extract_res.get("status") != "ok":
+            raise StructuredExtractionError(
+                str(extract_res.get("error_code") or "EXTRACTION_ERROR"),
+                str(extract_res.get("message") or "结构化抽取失败"),
+            )
         extracted_note: Dict[str, Any] = (
             extract_res["data"]
-            if extract_res.get("status") == "ok" and isinstance(extract_res.get("data"), dict)
+            if isinstance(extract_res.get("data"), dict)
             else {}
         )
         current_state_snapshot = extracted_note.get("current_state_snapshot") or {}
@@ -837,6 +858,15 @@ def run_benchmark(
                         turns,
                         visibility=visibility,
                         risk_report=final_risk_report,
+                    )
+                except StructuredExtractionError as exc:
+                    sanitized = _sanitize_error_message(str(exc))
+                    eval_res = _build_infra_failure_result(
+                        case,
+                        visibility=visibility,
+                        error_message=sanitized,
+                        extraction_failed=True,
+                        extraction_error=sanitized,
                     )
                 except Exception as exc:
                     sanitized = _sanitize_error_message(f"{type(exc).__name__}: {exc}")

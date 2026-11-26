@@ -107,19 +107,48 @@ _DRAFT_PRE_PROHIBITION_RE = re.compile(
     r"(?:严禁|禁止|切勿|切忌|绝不可|绝不能|不得|不可以|不可|不能|不要|不建议|不推荐|不予|不宜|避免|禁忌|暂缓|停止|暂停|杜绝|严防|勿|忌)"
 )
 _DRAFT_POST_PROHIBITION_RE = re.compile(
-    r"(?:是不?可取的|是不允许的|均属禁忌|属禁忌|均禁止|均严禁|不可以|不行|不可|不得|禁止|严禁|禁忌|应避免|需避免|要避免)"
+    r"(?:是不?可取的|是不允许的|均属禁忌|属禁忌|均禁止|均严禁|不可以|不行|不可|不得|禁止|严禁|禁忌|应避免|需避免|要避免|切勿尝试)"
 )
 _DRAFT_AFFIRMATIVE_RE = re.compile(
-    r"(?<![不未勿禁绝])(?:可行|可以|能够|可尝试|可做|可适当|直接做|直接行|安排|推荐|建议行|建议做|建议安排|建议尝试|建议开展|试试|就行|即可|无妨|照常|没问题|没关系|尽管|不妨)"
+    r"(?<![不未勿禁绝莫别免])(?:"
+    r"可行|可以(?!导致|引起|诱发|造成|加重|引发|致|使)"
+    r"|可做|可尝试|可适当|建议|安排|推荐|予以|去做|试试|直接做|直接行"
+    r"|继续|同服|一起吃|就行|即可|就好|也行|没问题|尽管|不妨|照常|没关系"
+    r"|松一下|来一遍|加上去|能做|能行|准予|批准|允许"
+    r"|可(?!能|导致|引起|诱发|造成|加重|引发|致|使|增|见|知|取|谓|惜|怕|疑|靠|怜|叹|爱|笑|恨|悲|喜|恶)"
+    r")"
 )
 _DRAFT_RIGHT_AFFIRMATIVE_RE = re.compile(
-    r"(?:可行|可以|就行|即可|无妨|试试|没问题|没关系|照常)"
+    r"(?:可行|可以(?!导致|引起|诱发|造成|加重|引发|致|使)|就行|即可|就好|也行|无妨|试试|没问题|没关系|照常|松一下|来一遍|加上去)"
 )
 _DRAFT_DOUBLE_NEG_PROHIBITION_RE = re.compile(
     r"(?:并非|不是|无需|不必|谈不上|没有)[^，。；\n]{0,6}?(?:禁止|严禁|禁忌|不可|不能)"
 )
+_DRAFT_NEG_BREAK_RE = re.compile(r"(?:但是|但|然而|不过|而是|改为|改做|改用)")
+_RISK_CONSEQUENCE_WARNING_RE = re.compile(
+    r"(?:导致|引起|诱发|造成|加重|引发|脱落|血栓脱落|肺栓塞|脊髓损伤|截瘫|骨折|出血|血肿|脱位|危险|风险)"
+)
+_DRAFT_SECTION_HEADING_RE = re.compile(r"^\s*#{2,6}\s+(.*)$", flags=re.MULTILINE)
+_DRAFT_SKIP_SECTION_TITLE_RE = re.compile(
+    r"(?:安全红旗|用药冲突硬约束|确定性安全|安全边界与绝对禁忌|绝对禁忌|当前风险提示与绝对禁忌|"
+    r"确定性量表|量表评估结果|当前功能与疼痛评估|跨诊次时间线|病例核心摘要|四诊与专科查体|四诊/影像要点)"
+)
+_DRAFT_CITATION_LINE_RE = re.compile(
+    r"^\s*(?:"
+    r"[-*]\s*\[(?:RF_\d+|DC_\d+|量表联动[^\]]+)\]"
+    r"|[-*]\s*(?:\*\*)?(?:命中依据|规则依据|临床警示|绝对禁忌操作|处置建议|联动警示|联动提示)\b"
+    r"|[-*]\s*\*\*(?:[0-9]{4}[-/.年]|术后|昨日|今日|半年前|\d+个?[天周月年]前|既往|本次|昨晚|个人记录)[^*]*\*\*\s*[:：]"
+    r")"
+)
+_DRAFT_PATIENT_REPORT_PREFIX_RE = re.compile(
+    r"^(?:[-*]\s*)?(?:患者|家属|本人)?(?:自诉|主诉|诉|曾询问|询问|今日要求|要求|欲|想提前|打算|准备|既往|网上看|朋友推荐|非要我去|上次|当时医嘱)"
+)
+_DRAFT_HISTORICAL_EFFECTIVE_RE = re.compile(r"既往[^，。；\n]{0,16}有效")
 _CONTRA_PREFIX_NOISE_RE = re.compile(
     r"^(?:未排除感染前的|未经手术医师许可(?:提前)?|未经影像学确诊的|非专业环境|术后早期|早期|局部|患肢|大面积多片|盲目|暴力|强行)"
+)
+_CONTRA_GENERIC_STOPWORDS: FrozenSet[str] = frozenset(
+    {"训练", "动作", "运动", "治疗", "药物", "用药", "外敷", "观察", "颈椎", "腰椎", "胸椎", "脊柱", "关节", "髋关节", "膝关节", "患肢", "局部"}
 )
 
 
@@ -139,7 +168,7 @@ def _extract_alert_action_terms(alerts: List[Dict[str, Any]]) -> List[Tuple[str,
                 continue
             for part in re.split(r"[（()）/\s、，,;；或及与]+", action_text):
                 token = _CONTRA_PREFIX_NOISE_RE.sub("", part.strip()).strip()
-                if len(token) >= 2 and token not in {"训练", "动作", "运动", "治疗", "药物", "用药", "外敷", "观察"}:
+                if len(token) >= 2 and token not in _CONTRA_GENERIC_STOPWORDS:
                     pat = re.escape(token)
                     if (rule_id, pat) not in seen_patterns:
                         seen_patterns.add((rule_id, pat))
@@ -153,40 +182,135 @@ def _extract_alert_action_terms(alerts: List[Dict[str, Any]]) -> List[Tuple[str,
     return items
 
 
-def _is_draft_subclause_negated(
+def _iter_checkable_draft_lines(draft_text: str) -> List[str]:
+    """Filter out deterministic constraint/timeline/citation blocks when draft has Markdown sections."""
+    has_sections = bool(_DRAFT_SECTION_HEADING_RE.search(draft_text))
+    if not has_sections:
+        return [ln for ln in draft_text.splitlines() if ln.strip()]
+
+    checkable: List[str] = []
+    in_preamble = True
+    in_blockquote_block = False
+    skip_section = False
+
+    for line in draft_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            in_blockquote_block = False
+            continue
+
+        sec_m = _DRAFT_SECTION_HEADING_RE.match(stripped)
+        if sec_m:
+            in_preamble = False
+            in_blockquote_block = False
+            skip_section = bool(_DRAFT_SKIP_SECTION_TITLE_RE.search(sec_m.group(1)))
+            continue
+
+        if in_preamble:
+            if stripped.startswith("# "):
+                in_blockquote_block = False
+                continue
+            if stripped.startswith(">"):
+                in_blockquote_block = True
+                continue
+            if in_blockquote_block:
+                continue
+
+        if skip_section:
+            continue
+
+        if _DRAFT_CITATION_LINE_RE.match(stripped):
+            continue
+
+        checkable.append(line)
+    return checkable
+
+
+def _sentence_has_risk_warning_exemption(sent: str) -> bool:
+    """Return True if sentence states a risk consequence warning without affirmative recommendation."""
+    if not _RISK_CONSEQUENCE_WARNING_RE.search(sent):
+        return False
+
+    for adv_part in re.split(r"(?:但是|但|然而|不过)", sent):
+        if not adv_part.strip():
+            continue
+        for sub in re.split(r"[；;，,]+", adv_part):
+            s = sub.strip()
+            if not s:
+                continue
+            if _DRAFT_PRE_PROHIBITION_RE.search(s) or _DRAFT_POST_PROHIBITION_RE.search(s):
+                continue
+            for aff_m in _DRAFT_AFFIRMATIVE_RE.finditer(s):
+                right_ctx = s[aff_m.end() :]
+                # Ignore causal/possibility phrasing such as "可以使血栓脱落" or "可能导致脊髓损伤"
+                if re.match(r"^\s*(?:导致|引起|诱发|造成|加重|引发|放大|增加|使)", right_ctx):
+                    continue
+                return False
+    return True
+
+
+def _is_patient_complaint_restatement(sent: str) -> bool:
+    """Return True when a sentence only restates patient request or historical efficacy without clinician approval."""
+    s = sent.strip()
+    if not s:
+        return False
+    if not (_DRAFT_PATIENT_REPORT_PREFIX_RE.search(s) or _DRAFT_HISTORICAL_EFFECTIVE_RE.search(s)):
+        return False
+    if re.search(r"[？?]\s*$", s):
+        return True
+    for adv_part in re.split(r"(?:但是|但|然而|不过)", s):
+        for sub in re.split(r"[；;，,]+", adv_part):
+            if _DRAFT_PRE_PROHIBITION_RE.search(sub):
+                continue
+            if _DRAFT_AFFIRMATIVE_RE.search(sub):
+                return False
+    return True
+
+
+_DRAFT_TRAILING_APPROVAL_RE = re.compile(
+    r"^(?:那么|那|则|即|当前|今日|今天|目前|也|都|还是)?\s*"
+    r"(?:可行|可以(?:安排|试|试试|做|行)?|安排(?:一下)?|建议(?:可行|安排|尝试|做)?|推荐|予以|就行|即可|就好|也行|没问题|没关系|试试|照常|松一下|来一遍|加上去)[。！!]?$"
+)
+
+
+def _analyze_draft_subclause(
     subclause: str,
     match_start: int,
     match_end: int,
     *,
     allow_prohibition_line_header: bool = False,
+    next_subclause: str = "",
 ) -> bool:
-    """Determine if an action match inside a draft subclause is prohibited/negated rather than recommended."""
+    """Return True iff the matched action is positively permitted/recommended and NOT negated."""
     left = subclause[:match_start]
     right = subclause[match_end:]
+    matched_text = subclause[match_start:match_end]
 
-    if _DRAFT_DOUBLE_NEG_PROHIBITION_RE.search(left):
-        return False
+    is_double_neg = bool(_DRAFT_DOUBLE_NEG_PROHIBITION_RE.search(left))
+    if not is_double_neg:
+        neg_matches = list(_DRAFT_PRE_PROHIBITION_RE.finditer(left))
+        if neg_matches:
+            last_neg = neg_matches[-1]
+            between = left[last_neg.end() :]
+            if not _DRAFT_NEG_BREAK_RE.search(between):
+                return False
 
-    neg_matches = list(_DRAFT_PRE_PROHIBITION_RE.finditer(left))
-    aff_matches = list(_DRAFT_AFFIRMATIVE_RE.finditer(left))
+        if _DRAFT_POST_PROHIBITION_RE.search(right):
+            return False
 
-    if neg_matches:
-        last_neg_pos = neg_matches[-1].start()
-        last_aff_pos = aff_matches[-1].start() if aff_matches else -1
-        if last_neg_pos > last_aff_pos:
-            return True
-        return False
+        if allow_prohibition_line_header and not _DRAFT_AFFIRMATIVE_RE.search(left):
+            return False
 
-    if aff_matches:
-        return False
-
-    if _DRAFT_POST_PROHIBITION_RE.search(right):
+    # Principle 3: positive permission/recommendation context must govern the matched action
+    if _DRAFT_AFFIRMATIVE_RE.search(left) or _DRAFT_RIGHT_AFFIRMATIVE_RE.search(right):
         return True
 
-    if _DRAFT_RIGHT_AFFIRMATIVE_RE.search(right):
-        return False
+    # Self-affirmative compound drug phrases (e.g., "继续同服", "一起吃") when not negated or questioned
+    if re.search(r"(?:继续同服|同服|一起吃|照常吃)", matched_text) and not re.search(r"[？?]\s*$", subclause):
+        return True
 
-    if allow_prohibition_line_header:
+    # Adjacent pure-approval follow-up clause (e.g., "患者要求做颈椎旋转扳法，可以安排。")
+    if next_subclause and _DRAFT_TRAILING_APPROVAL_RE.match(next_subclause.strip()):
         return True
 
     return False
@@ -198,8 +322,12 @@ def verify_draft_against_alerts(
 ) -> Dict[str, Any]:
     """Deterministic post-generation draft verification against active safety alerts.
 
-    Blocks any non-negated recommendation of contraindicated actions (e.g., cervical rotational
-    manipulation when RF_001 is active) while allowing properly negated prohibitions (e.g., '严禁颈椎旋转扳法').
+    Enforces three principles:
+    1. Only inspect self-authored recommendation/education segments (skip deterministic constraint,
+       timeline, citation blocks, and pure patient-request restatements when sectioned).
+    2. Exempt risk-consequence warning sentences that carry no affirmative recommendation.
+    3. Flag violations only when an affirmative permission/recommendation context governs the
+       contraindicated action without negation.
     """
     active_alerts = [a for a in (alerts or []) if isinstance(a, dict)]
     if not active_alerts or not (draft_text or "").strip():
@@ -209,32 +337,35 @@ def verify_draft_against_alerts(
     violations: List[Dict[str, str]] = []
     seen_violation_keys = set()
 
-    for line in draft_text.splitlines():
-        if not line.strip():
-            continue
+    for line in _iter_checkable_draft_lines(draft_text):
         has_header = bool(_DRAFT_PROHIBITION_LINE_HEADER_RE.search(line))
-        # Split sentences first; line-level prohibition headers only govern the opening sentence before any adversative
-        sentences = re.split(r"[。！？]+", line)
+        # Preserve trailing punctuation per sentence so interrogatives / warnings remain intact
+        sentences = [s for s in re.findall(r"[^。！？\n]+[。！？]*", line) if s.strip()]
         for sent_idx, sent in enumerate(sentences):
-            if not sent.strip():
+            if _sentence_has_risk_warning_exemption(sent):
                 continue
-            # Split on adversative conjunctions: anything after 但/但是/然而/不过 loses line-header exemption
-            adv_parts = re.split(r"(?:但是|但|然而|不过)", sent)
+            if _is_patient_complaint_restatement(sent):
+                continue
+
+            sent_body = re.sub(r"[。！？]+$", "", sent)
+            adv_parts = re.split(r"(?:但是|但|然而|不过)", sent_body)
             for adv_idx, adv_part in enumerate(adv_parts):
                 if not adv_part.strip():
                     continue
                 allow_header_here = has_header and sent_idx == 0 and adv_idx == 0
                 subclauses = re.split(r"[；;，,]+", adv_part)
-                for sub in subclauses:
+                for sub_idx, sub in enumerate(subclauses):
                     if not sub.strip():
                         continue
+                    next_sub = subclauses[sub_idx + 1] if sub_idx + 1 < len(subclauses) else ""
                     for rule_id, rule_label, pat in action_specs:
                         for m in re.finditer(pat, sub, flags=re.IGNORECASE):
-                            if _is_draft_subclause_negated(
+                            if not _analyze_draft_subclause(
                                 sub,
                                 m.start(),
                                 m.end(),
                                 allow_prohibition_line_header=allow_header_here,
+                                next_subclause=next_sub,
                             ):
                                 continue
                             matched_action = m.group(0)
@@ -763,7 +894,7 @@ def _render_tab_structured_note(state: Dict[str, Any]) -> None:
                         "停药天数": (
                             f"{m['stopped_days_ago']:g} 天（洗脱期内）"
                             if m.get("stopped_days_ago") is not None
-                            else "在用 / 未停药"
+                            else ("已停用（天数未明，按洗脱期内处理）" if m.get("status") == "stopped" else "在用 / 未停药")
                         ),
                     }
                     for m in active_meds

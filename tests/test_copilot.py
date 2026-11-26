@@ -563,3 +563,82 @@ def test_joa_mild_caution_13_to_16_merges_into_unified_alerts_and_blocks_manipul
     # Draft recommending cervical rotational manipulation must be blocked by this caution alert
     assert verify_draft_against_alerts("可行颈椎旋转扳法松解。", unified)["blocked"] is True
     assert verify_draft_against_alerts("严禁颈椎旋转扳法，动态随访。", unified)["blocked"] is False
+
+
+def test_verify_draft_against_alerts_r2_warning_exemption_and_permission_context() -> None:
+    """R2: Risk warning sentences without approval are exempted; restatements do not block; unsafe approvals still block."""
+    rf001_alerts = [
+        {
+            "rule_id": "RF_001",
+            "name": "脊髓型颈椎病/颈脊髓受压征象",
+            "contraindicated_actions": ["颈椎旋转扳法/高速低幅整复", "大重量颈椎牵引"],
+        }
+    ]
+    rf009_alerts = [
+        {
+            "rule_id": "RF_009",
+            "name": "重度骨质疏松",
+            "contraindicated_actions": ["腰椎斜扳与踩跷手法"],
+        }
+    ]
+    dc011_alerts = [{"rule_id": "DC_011", "name": "抗栓洗脱期内+有创操作"}]
+
+    # Risk-consequence warning sentences must pass
+    warn_res = verify_draft_against_alerts("颈椎旋转扳法可能导致脊髓损伤，切勿尝试。", rf001_alerts)
+    assert warn_res["passed"] is True
+    assert warn_res["blocked"] is False
+    assert verify_draft_against_alerts("腰椎斜扳和踩背都可以导致新的椎体骨折，请勿尝试。", rf009_alerts)["blocked"] is False
+
+    # Pure patient request / historical restatements without affirmative approval must pass
+    assert verify_draft_against_alerts("今日要求小针刀松解。", dc011_alerts)["blocked"] is False
+    assert verify_draft_against_alerts("既往艾灸热敷有效。", [{"rule_id": "RF_010", "name": "热痹"}])["blocked"] is False
+
+    # Unsafe recommendations must remain 100% blocked
+    assert verify_draft_against_alerts("建议今日可行颈椎旋转扳法松解。", rf001_alerts)["blocked"] is True
+    assert (
+        verify_draft_against_alerts("绝对禁忌：禁止暴力牵引，但直接做颈椎旋转复位就行。", rf001_alerts)["blocked"]
+        is True
+    )
+    assert (
+        verify_draft_against_alerts("绝对禁忌：禁止暴力牵引，但颈椎旋转复位就行。", rf001_alerts)["blocked"]
+        is True
+    )
+    assert verify_draft_against_alerts("患者要求做颈椎旋转扳法，可以安排。", rf001_alerts)["blocked"] is True
+    assert verify_draft_against_alerts("华法林与三七粉继续同服没问题。", dc011_alerts)["blocked"] is True
+
+
+def test_mock_copilot_drafts_not_blocked_across_all_flagged_public_cases(monkeypatch) -> None:
+    """R2 acceptance: All flagged public cases (incl. RF_010, RF_007, DC_011) produce unblocked Mock drafts in both modes."""
+    import glob
+    import yaml
+
+    monkeypatch.setenv("LLM_MOCK_MODE", "true")
+    public_files = sorted(glob.glob(str(PROJECT_ROOT / "app_benchmark" / "test_cases" / "public" / "*.yaml")))
+    assert len(public_files) >= 15
+
+    flagged_checked = set()
+    for path_str in public_files:
+        case_data = yaml.safe_load(Path(path_str).read_text(encoding="utf-8"))
+        case_id = case_data["case_id"]
+        turns = case_data.get("multi_turn_script") or []
+        raw_text = "\n".join(t["user_msg"] for t in turns)
+
+        for mode in ("ward_round", "rehab_education"):
+            state = run_copilot_analysis(raw_text, draft_mode=mode, mock_mode=True)
+            if state["unified_alerts"]:
+                flagged_checked.add(case_id)
+                assert state["draft"]["blocked"] is False, (
+                    f"{case_id} [{mode}] compliant mock draft was wrongly blocked: "
+                    f"{state['draft']['safety_check']['violations']}"
+                )
+                assert state["draft"]["safety_check"]["passed"] is True
+
+            if case_id == "ORTHO_LONG_013" and mode == "ward_round":
+                snap = state["extracted_note"]["current_state_snapshot"]
+                active_meds = {m["name"]: m for m in snap["active_medications"]}
+                assert active_meds["氯吡格雷"]["status"] == "stopped"
+                assert active_meds["氯吡格雷"]["stopped_days_ago"] == 3.0
+                assert "小针刀" not in active_meds
+                assert "针刀" not in active_meds
+
+    assert {"ORTHO_LONG_016", "ORTHO_REDFLAG_003", "ORTHO_LONG_013"}.issubset(flagged_checked)

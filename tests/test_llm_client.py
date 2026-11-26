@@ -337,3 +337,66 @@ def test_mock_drug_cessation_scope_negation_and_resume(monkeypatch) -> None:
     meds_resume = {m["name"]: m for m in ext_resume["structured_facts"]["medications"]}
     assert meds_resume["华法林"]["status"] == "active"
     assert meds_resume["华法林"]["stopped_days_ago"] is None
+
+
+def test_mock_symptom_polarity_block_temporal_semantics_and_conservative_tiebreak(monkeypatch) -> None:
+    """R5 #1: Earlier negation must NOT override later positive symptoms; ambiguous timing defaults to present."""
+    monkeypatch.setenv("LLM_MOCK_MODE", "true")
+
+    for note_text, expected_rule in (
+        ("【今日】患者踩棉花感明显。\n【既往】既往体健，否认踩棉花感。", "RF_001"),
+        ("【现】走路踩棉花感明显。\n【3年前】无踩棉花感。", "RF_001"),
+        ("【本次】右膝突发关节红肿热痛。\n【1年前】无关节红肿热痛。", "RF_010"),
+        ("既往否认踩棉花感。\n患者踩棉花感明显。", "RF_001"),
+    ):
+        ext = extract_structured_json(note_text, schema_model=CopilotExtractedNote, mock_mode=True)["data"]
+        sym_map = {s["name"]: s["polarity"] for s in ext["structured_facts"]["symptoms"]}
+        assert any(pol == "present" for pol in sym_map.values()), f"Expected present symptom for: {note_text}"
+        report = scan_clinical_risks(raw_text=note_text, structured_facts=ext["structured_facts"])
+        assert any(a["rule_id"] == expected_rule for a in report["alerts"]), f"Missing {expected_rule} for: {note_text}"
+
+    # When an explicit later visit negates the symptom, absent is preserved
+    resolved_note = "【1年前】曾偶发踩棉花感。\n【今日】症状完全缓解，否认踩棉花感。"
+    ext_resolved = extract_structured_json(resolved_note, schema_model=CopilotExtractedNote, mock_mode=True)["data"]
+    sym_resolved = {s["name"]: s["polarity"] for s in ext_resolved["structured_facts"]["symptoms"]}
+    assert sym_resolved.get("踩棉花感") == "absent"
+
+
+def test_mock_clopidogrel_stopped_3_days_and_excludes_invasive_procedures(monkeypatch) -> None:
+    """R5 #3 & #4: 3-day stopped clopidogrel parses stopped_days_ago=3.0; invasive ops never enter medications."""
+    monkeypatch.setenv("LLM_MOCK_MODE", "true")
+
+    # 1. Single-sentence PoC
+    single_ext = extract_structured_json("3天前自行停用氯吡格雷", schema_model=CopilotExtractedNote, mock_mode=True)["data"]
+    single_meds = {m["name"]: m for m in single_ext["structured_facts"]["medications"]}
+    assert single_meds["氯吡格雷"]["status"] == "stopped"
+    assert single_meds["氯吡格雷"]["stopped_days_ago"] == 3.0
+
+    # 2. ORTHO_LONG_013 Turn 1 + Turn 2 with invasive procedures
+    note_013_t1 = (
+        "【1年前 心内科记录】冠脉支架植入术后长期口服氯吡格雷75mg qd抗血小板治疗。\n"
+        "【3天前 个人记录】因为听说做骨科治疗要停药，我自己把氯吡格雷停掉了，到今天刚好停药3天。"
+    )
+    ext_t1 = extract_structured_json(note_013_t1, schema_model=CopilotExtractedNote, mock_mode=True)["data"]
+    active_t1 = {m["name"]: m for m in ext_t1["current_state_snapshot"]["active_medications"]}
+    assert active_t1["氯吡格雷"]["status"] == "stopped"
+    assert active_t1["氯吡格雷"]["stopped_days_ago"] == 3.0
+
+    note_013_full = (
+        note_013_t1
+        + "\n今日肩周粘连，要求安排小针刀、针刀、封闭、拔罐或强力推拿松解。"
+    )
+    ext_full = extract_structured_json(note_013_full, schema_model=CopilotExtractedNote, mock_mode=True)["data"]
+    all_med_names = (
+        {m["name"] for m in ext_full["structured_facts"]["medications"]}
+        | {m["name"] for m in ext_full["current_state_snapshot"]["active_medications"]}
+        | {m["name"] for m in ext_full["current_state_snapshot"]["stopped_medications"]}
+    )
+    for non_drug in ("小针刀", "针刀", "封闭", "拔罐", "强力推拿"):
+        assert non_drug not in all_med_names, f"Non-drug procedure '{non_drug}' leaked into medications"
+
+    # DC_011 still triggers in both raw-text scan and hybrid structured scan
+    raw_report = scan_clinical_risks(raw_text=note_013_full)
+    hybrid_report = scan_clinical_risks(raw_text=note_013_full, structured_facts=ext_full["structured_facts"])
+    assert any(a["rule_id"] == "DC_011" for a in raw_report["alerts"])
+    assert any(a["rule_id"] == "DC_011" for a in hybrid_report["alerts"])

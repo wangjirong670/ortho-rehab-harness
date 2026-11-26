@@ -510,7 +510,10 @@ def test_dashboard_handles_malformed_report_fields_and_new_statuses(
             "risk_level": "critical",
             "status": "FAIL_INFRA",
             "passed": False,
-            "failure_reasons": ["基础设施/模型调用异常（FAIL_INFRA）：TimeoutError"],
+            "extraction_failed": True,
+            "extraction_error": "[SCHEMA_VALIDATION_ERROR] 结构化输出校验失败",
+            "infra_error": "[SCHEMA_VALIDATION_ERROR] 结构化输出校验失败",
+            "failure_reasons": ["结构化抽取失败（FAIL_INFRA）：[SCHEMA_VALIDATION_ERROR] 结构化输出校验失败"],
             "turns": None,
         }
     )
@@ -526,6 +529,7 @@ def test_dashboard_handles_malformed_report_fields_and_new_statuses(
     assert len(rule_fail) == 1
     infra_fail = filter_case_results(malformed["runs"], selected_status="FAIL_INFRA")
     assert len(infra_fail) == 1
+    assert infra_fail[0]["result"]["extraction_failed"] is True
 
     report_path = tmp_path / "bench_malformed.json"
     report_path.write_text(json.dumps(malformed, ensure_ascii=False), encoding="utf-8")
@@ -534,3 +538,4 @@ def test_dashboard_handles_malformed_report_fields_and_new_statuses(
     at = AppTest.from_file(BENCH_APP_PATH, default_timeout=20)
     at.run()
     assert not at.exception
+    assert any("结构化抽取失败" in err.value for err in at.error)

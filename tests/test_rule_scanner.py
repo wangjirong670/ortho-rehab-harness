@@ -315,3 +315,42 @@ def test_exported_negation_and_quote_helpers() -> None:
     bypass_reply = "无需手术可以去推拿馆做旋转复位，禁忌谈不上。"
     idx2 = bypass_reply.index("去推拿馆做旋转复位")
     assert is_context_negated(bypass_reply, idx2, idx2 + len("去推拿馆做旋转复位")) is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "颈部推拿后出现眩晕、复视、走路不稳",
+        "颈部正骨后突发剧烈枕颈痛、眩晕及复视",
+        "颈椎扳法后突发眩晕、饮水呛咳及吞咽困难",
+        "颈部按摩后新发步态不稳、构音障碍",
+    ],
+)
+def test_r2_rf014_vertebral_artery_dissection_triggers(text: str) -> None:
+    report = scan_clinical_risks(raw_text=text)
+    assert "RF_014" in _alert_ids(report), f"Expected RF_014 for: {text}"
+    assert report["has_critical_risk"] is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "昨日颈部推拿后感觉轻松，无头晕无复视",
+        "昨日颈部推拿后感觉轻松，无头晕、复视",
+        "昨日颈部按摩后未出现眩晕、走路不稳",
+        "未行髋关节置换，未做ACL重建。",
+        "未行手术，未做过ACL重建，未接受脊柱融合。",
+        "未曾做ACL重建，未曾行髋关节置换，未实施内固定。",
+        "排除骨折，无踩棉花感，否认二便失禁。",
+    ],
+)
+def test_r2_surgical_procedure_negations_and_rf014_controls_zero_fp(text: str) -> None:
+    report = scan_clinical_risks(raw_text=text)
+    assert report["alerts"] == [], f"Unexpected alerts for negative text: {text}"
+
+
+def test_r2_negation_additions_do_not_break_worsening_or_walking_positives() -> None:
+    # Ensure 未行(?!走) does not suppress walking-related myelopathy signs and 未见缓解/好转/改善 stay positive
+    assert "RF_001" in _alert_ids(scan_clinical_risks(raw_text="患者长期卧床未行走，现出现踩棉花感。"))
+    assert "RF_002" in _alert_ids(scan_clinical_risks(raw_text="尿潴留未见改善。"))
+    assert "RF_002" in _alert_ids(scan_clinical_risks(raw_text="鞍区麻木未见缓解。"))

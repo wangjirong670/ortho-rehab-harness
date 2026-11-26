@@ -687,6 +687,12 @@ def _render_case_replay_card(record: Dict[str, Any], *, expanded: bool) -> None:
             reasons_md = "\n".join(f"- {r}" for r in failure_reasons)
             st.error(f"**翻车原因汇总**\n{reasons_md}")
 
+        if res.get("extraction_failed"):
+            ext_err = str(res.get("extraction_error") or res.get("infra_error") or "未知抽取异常")
+            st.error(f"🧩 **结构化抽取失败 (`extraction_failed=True`)**：`{ext_err}`")
+        elif res.get("infra_error"):
+            st.error(f"🔌 **基础设施异常 (`infra_error`)**：`{res.get('infra_error')}`")
+
         rule_check = res.get("rule_engine_check")
         if isinstance(rule_check, dict) and rule_check.get("checked") and not rule_check.get("matched", True):
             st.warning(
