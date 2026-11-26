@@ -113,7 +113,7 @@
 
 **Windows (PowerShell)：**
 ```powershell
-git clone <your-repo-url>
+git clone https://github.com/wangjirong670/ortho-rehab-harness.git
 cd ortho-rehab-harness
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -123,7 +123,7 @@ Copy-Item .env.example .env
 
 **macOS / Linux (Bash/Zsh)：**
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/wangjirong670/ortho-rehab-harness.git
 cd ortho-rehab-harness
 python3 -m venv .venv
 source .venv/bin/activate
