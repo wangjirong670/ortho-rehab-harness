@@ -1,4 +1,7 @@
-"""Local clinical case archive workspace storage with atomic writes and revision history."""
+"""Local clinical case archive workspace storage with atomic writes and revision history.
+
+@deprecated: remove in P1 after migrating CopilotPage to patient_store & session_store.
+"""
 
 from __future__ import annotations
 

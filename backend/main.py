@@ -17,10 +17,10 @@ from backend.deps import (
     resolve_frontend_dist_dir,
     verify_bearer_token,
 )
-from backend.routers import benchmark, cases, copilot, kb, settings
+from backend.routers import benchmark, cases, copilot, kb, patients, sessions, settings
 from core_tools.llm_client import LLMConfig
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 
 
 @asynccontextmanager
@@ -64,6 +64,9 @@ def create_app() -> FastAPI:
         }
 
     auth_deps = [Depends(verify_bearer_token)]
+    application.include_router(patients.router, prefix="/api/v1", dependencies=auth_deps)
+    application.include_router(sessions.router, prefix="/api/v1", dependencies=auth_deps)
+    # @deprecated: copilot and cases routers kept during P0->P1 transition; remove in P1
     application.include_router(copilot.router, prefix="/api/v1", dependencies=auth_deps)
     application.include_router(cases.router, prefix="/api/v1", dependencies=auth_deps)
     application.include_router(benchmark.router, prefix="/api/v1", dependencies=auth_deps)

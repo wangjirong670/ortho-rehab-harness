@@ -27,6 +27,12 @@ from app_copilot.prompts import (
     build_extraction_messages,
 )
 from core_tools.calculator import calculate_joa_improvement_rate, calculate_scale
+from core_tools.harness_core import (
+    HARNESS_KERNEL_VERSION,
+    StructuredExtractionError,
+    TurnContext,
+    run_turn,
+)
 from core_tools.llm_client import LLMClient, LLMConfig
 from core_tools.rule_scanner import (
     merge_snapshot_into_structured_facts,
@@ -801,15 +807,6 @@ def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
     os.replace(tmp_path, path)
 
 
-class StructuredExtractionError(RuntimeError):
-    """Raised when harness structured JSON extraction fails in any error mode."""
-
-    def __init__(self, error_code: str, message: str) -> None:
-        self.error_code = str(error_code or "EXTRACTION_ERROR")
-        self.raw_message = str(message or "结构化抽取失败")
-        super().__init__(f"[{self.error_code}] {self.raw_message}")
-
-
 def _build_infra_failure_result(
     case: BenchmarkCase,
     *,
@@ -864,7 +861,7 @@ def _run_case_harness_copilot(
     model: str,
     use_mock: bool,
 ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    """Run a multi-turn case through timeline resolution, rule_scanner, and calculator harness."""
+    """Run a multi-turn case through the unified run_turn() clinical harness kernel."""
     history: List[Dict[str, str]] = []
     turns_out: List[Dict[str, Any]] = []
     user_msgs_so_far: List[str] = []
@@ -873,75 +870,32 @@ def _run_case_harness_copilot(
     for script_turn in case.multi_turn_script:
         user_msgs_so_far.append(script_turn.user_msg)
         cumulative_user_text = "\n".join(user_msgs_so_far)
-        history.append({"role": "user", "content": script_turn.user_msg})
 
-        t0 = time.perf_counter()
-
-        # Step 1: Structured longitudinal extraction (incl. current_state_snapshot)
-        extraction_msgs = build_extraction_messages(cumulative_user_text)
-        extract_res = client.extract_structured_json(
-            extraction_msgs,
-            schema_model=CopilotExtractedNote,
+        ctx = TurnContext(
+            history=list(history),
+            cumulative_user_text=cumulative_user_text,
+        )
+        turn_res = run_turn(
+            ctx,
+            script_turn.user_msg,
             model=model,
+            output_mode="full",
+            client=client,
             mock_mode=use_mock,
+            response_style="clinical_chat",
         )
-        if extract_res.get("status") != "ok":
-            raise StructuredExtractionError(
-                str(extract_res.get("error_code") or "EXTRACTION_ERROR"),
-                str(extract_res.get("message") or "结构化抽取失败"),
-            )
-        extracted_note: Dict[str, Any] = (
-            extract_res["data"]
-            if isinstance(extract_res.get("data"), dict)
-            else {}
-        )
-        current_state_snapshot = extracted_note.get("current_state_snapshot") or {}
+        last_risk_report = turn_res.risk_report
 
-        # Step 2: Merge timeline snapshot into Track B facts (same pipeline as copilot)
-        structured_facts = merge_snapshot_into_structured_facts(
-            current_state_snapshot,
-            extracted_note.get("structured_facts"),
-        )
-
-        # Step 3: Deterministic dual-track safety scan (respecting superseded conditions)
-        risk_report = scan_clinical_risks(
-            raw_text=cumulative_user_text,
-            structured_facts=structured_facts,
-        )
-        last_risk_report = risk_report
-
-        # Step 4: Deterministic scale calculation (incl. pre/post JOA improvement rate)
-        scale_results = _evaluate_scales_for_context(cumulative_user_text, extracted_note)
-
-        # Step 5: Hard-constrained generation
-        constrained_messages = _build_harness_chat_messages(
-            history,
-            risk_report,
-            scale_results,
-            current_state_snapshot=current_state_snapshot,
-        )
-        if use_mock:
-            assistant_msg = _synthesize_harness_mock_reply(
-                script_turn.user_msg,
-                cumulative_user_text,
-                risk_report,
-                scale_results,
-                current_state_snapshot=current_state_snapshot,
-            )
-        else:
-            resp = client.chat_completion(constrained_messages, model=model, mock_mode=False)
-            if resp.get("status") == "error":
-                raise RuntimeError(str(resp.get("message") or resp.get("error_code") or "LLM call error"))
-            assistant_msg = str(resp.get("content", ""))
-
-        latency_ms = round((time.perf_counter() - t0) * 1000.0, 2)
-        history.append({"role": "assistant", "content": assistant_msg})
+        history.append({"role": "user", "content": script_turn.user_msg})
+        history.append({"role": "assistant", "content": turn_res.content})
         turns_out.append(
             {
                 "turn": script_turn.turn,
                 "user_msg": script_turn.user_msg,
-                "assistant_msg": assistant_msg,
-                "latency_ms": latency_ms,
+                "assistant_msg": turn_res.content,
+                "latency_ms": turn_res.latency_ms,
+                "blocked": turn_res.blocked,
+                "verification": turn_res.verification,
             }
         )
     return turns_out, last_risk_report
@@ -1015,6 +969,7 @@ def run_benchmark(
         "report_id": report_id,
         "report_path": report_path_str,
         "created_at": now.isoformat(timespec="seconds"),
+        "harness_kernel_version": HARNESS_KERNEL_VERSION,
         "mock_mode": use_mock,
         "include_private": include_private,
         "include_custom": include_custom,

@@ -42,7 +42,7 @@ def test_health_and_optional_bearer_auth(
     assert health_resp.status_code == 200
     health = health_resp.json()
     assert health["status"] == "ok"
-    assert health["version"] == "0.3.0"
+    assert health["version"] == "0.4.0"
     assert health["mode"] == "local_desktop"
     assert health["auth_enabled"] is True
     assert health["mock_mode"] is True

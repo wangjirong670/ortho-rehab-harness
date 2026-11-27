@@ -7,7 +7,7 @@ and unique IDs before any knowledge base file enters runtime tools.
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -347,3 +347,109 @@ class BenchmarkCase(BaseModel):
         if actual_turns != expected_turns:
             raise ValueError(f"Case {self.case_id}: turn sequence must be {expected_turns}, got {actual_turns}")
         return self
+
+
+# ==============================================================================
+# 5. Patient Workspace Card Schema (case_archives/<patient_id>/PATIENT.md)
+# ==============================================================================
+
+EntrySource = Literal["clinician", "extracted", "system"]
+PATIENT_ID_REGEX = r"^[A-Za-z0-9_-]{1,64}$"
+
+
+class PatientRedFlagItem(BaseModel):
+    """Persistent red flag / drug conflict record stored on a patient card."""
+
+    id: str = Field(min_length=1)
+    name: Optional[str] = None
+    since: str = Field(min_length=1)
+    status: Literal["active", "resolved"] = "active"
+    source: EntrySource = "extracted"
+    resolved_reason: Optional[str] = None
+    resolved_at: Optional[str] = None
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _normalize_rf_id(cls, value: Any) -> str:
+        cleaned = str(value or "").strip().upper()
+        if not cleaned:
+            raise ValueError("红旗规则 ID 不能为空。")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _validate_resolution(self) -> "PatientRedFlagItem":
+        if self.status == "resolved" and not (self.resolved_reason or "").strip():
+            raise ValueError(f"解除红旗 {self.id} 必须填写 resolved_reason")
+        return self
+
+
+class PatientMedicationItem(BaseModel):
+    """Patient-level medication history entry supporting washout tracking."""
+
+    name: str = Field(min_length=1)
+    status: Literal["active", "stopped", "unknown"] = "active"
+    start_date: Optional[str] = None
+    stop_date: Optional[str] = None
+    stopped_days_ago: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    source: EntrySource = "extracted"
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _normalize_med_name(cls, value: Any) -> str:
+        cleaned = str(value or "").strip()
+        if not cleaned:
+            raise ValueError("药物名称不能为空。")
+        return cleaned
+
+
+class PatientScaleRecord(BaseModel):
+    """Historical deterministic scale result attached to a patient card."""
+
+    scale_id: str = Field(min_length=1)
+    date: str = Field(min_length=1)
+    total_score: Optional[float] = None
+    severity_band: Optional[str] = None
+    status: str = "ok"
+    source: EntrySource = "system"
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("scale_id", mode="before")
+    @classmethod
+    def _normalize_scale_id(cls, value: Any) -> str:
+        return str(value or "").strip().upper()
+
+
+class PatientCard(BaseModel):
+    """Structured YAML front matter for case_archives/<patient_id>/PATIENT.md."""
+
+    patient_id: str = Field(pattern=PATIENT_ID_REGEX)
+    display_name: str = Field(default="", max_length=64)
+    active_red_flags: List[PatientRedFlagItem] = Field(default_factory=list)
+    medications: List[PatientMedicationItem] = Field(default_factory=list)
+    allergies: List[str] = Field(default_factory=list)
+    surgical_history: List[str] = Field(default_factory=list)
+    scale_history: List[PatientScaleRecord] = Field(default_factory=list)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    revision: int = Field(default=1, ge=1)
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _normalize_display_name(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value).strip()[:64]
+
+    @field_validator("allergies", "surgical_history", mode="before")
+    @classmethod
+    def _normalize_string_list(cls, value: Any) -> List[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            return [str(value).strip()] if str(value).strip() else []
+        out: List[str] = []
+        for item in value:
+            s = str(item or "").strip()
+            if s and s not in out:
+                out.append(s)
+        return out

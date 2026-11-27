@@ -1,4 +1,7 @@
-"""Local clinical case archive workspace REST endpoints (/api/v1/cases/*)."""
+"""Local clinical case archive workspace REST endpoints (/api/v1/cases/*).
+
+@deprecated: remove in P1 when legacy CopilotPage is replaced.
+"""
 
 from __future__ import annotations
 
