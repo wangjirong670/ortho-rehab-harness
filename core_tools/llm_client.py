@@ -1841,11 +1841,16 @@ class LLMClient:
             cap = get_model_capabilities(chosen_model)
             norm_level = normalize_thinking_level(thinking)
             mock_reasoning = ""
-            if cap.get("supports_thinking") and (
-                norm_level != "off" or cap.get("mechanism") == "always_on"
+            if norm_level != "off" or (
+                cap.get("supports_thinking") and cap.get("mechanism") == "always_on"
             ):
+                sim_note = (
+                    ""
+                    if cap.get("supports_thinking")
+                    else " | Mock 仿真模拟"
+                )
                 mock_reasoning = (
-                    f"[Mock L3 推理 | 模型 {chosen_model} | 强度={norm_level}]\n"
+                    f"[Mock L3 推理 | 模型 {chosen_model} | 强度={norm_level}{sim_note}]\n"
                     "1. 先核对确定性安全引擎传入的红旗规则、用药洗脱期与量表分数边界。\n"
                     "2. 确认所有高危禁忌均以“严禁/切勿”前置明示，避免越权推荐风险手法或叠加用药。"
                 )

@@ -584,7 +584,7 @@ export const CopilotWorkspace: React.FC<CopilotWorkspaceProps> = ({
   return (
     <div className="flex min-h-[540px] flex-col gap-3 md:h-[calc(100vh-92px)] md:flex-row">
       {/* Middle Pane: PatientCardEditor OR Active Session ChatStream + Composer */}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative z-20 flex min-h-0 min-w-0 flex-1 flex-col">
         {activeView === "card" ? (
           <PatientCardEditor
             patient={patientDetail}

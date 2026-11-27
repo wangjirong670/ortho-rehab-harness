@@ -51,6 +51,9 @@ class BenchmarkRunRequest(BaseModel):
     )
     mock_mode: bool = True
     include_private: bool = False
+    model_thinking: Dict[str, Literal["off", "low", "medium", "high"]] = Field(
+        default_factory=dict
+    )
 
 
 @dataclass
@@ -177,6 +180,7 @@ def _execute_benchmark_job(job: _BenchmarkJob, req: BenchmarkRunRequest, output_
             save_report=True,
             output_dir=str(output_dir),
             progress_callback=_on_progress,
+            model_thinking=req.model_thinking,
         )
         report_path = report.get("report_path")
         filename = Path(report_path).name if report_path else ""

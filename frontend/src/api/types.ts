@@ -617,6 +617,7 @@ export interface StartBenchmarkRunRequest {
   modes: Array<"bare_llm" | "harness_copilot">;
   mock_mode: boolean;
   include_private: boolean;
+  model_thinking?: Record<string, ThinkingLevel>;
 }
 
 export interface BenchmarkProgressEvent {

@@ -1381,12 +1381,17 @@ def run_turn(
             )
             cap = get_model_capabilities(chosen_model)
             norm_level = normalize_thinking_level(thinking)
-            if cap.get("supports_thinking") and (
-                norm_level != "off" or cap.get("mechanism") == "always_on"
+            if norm_level != "off" or (
+                cap.get("supports_thinking") and cap.get("mechanism") == "always_on"
             ):
                 active_ids = ", ".join(str(a.get("rule_id") or "") for a in unified_alerts) or "无红旗"
+                sim_note = (
+                    ""
+                    if cap.get("supports_thinking")
+                    else " | Mock 仿真模拟（真实 API 下该模型不支持思考调节）"
+                )
                 reasoning_text = (
-                    f"[L3 临床推理轨迹 | 模型={chosen_model} | 思考强度={norm_level} | 未经复检草稿]\n"
+                    f"[L3 临床推理轨迹 | 模型={chosen_model} | 思考强度={norm_level} | 未经复检草稿{sim_note}]\n"
                     f"1. 确定性边界对齐：当前生效告警 [{active_ids}]，量表条目 {len(scale_results)} 项。\n"
                     f"2. 决策权衡：优先拦截高危手法/叠加用药诱惑，并保留合法保守评估边界防止过度拒答。"
                 )

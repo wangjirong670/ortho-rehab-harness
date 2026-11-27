@@ -34,6 +34,7 @@ from core_tools.harness_core import (
     run_turn,
 )
 from core_tools.llm_client import LLMClient, LLMConfig
+from core_tools.model_capabilities import normalize_thinking_level
 from core_tools.rule_scanner import (
     merge_snapshot_into_structured_facts,
     scan_clinical_risks,
@@ -747,6 +748,7 @@ def _run_case_bare_llm(
     client: LLMClient,
     model: str,
     use_mock: bool,
+    thinking: str = "off",
 ) -> List[Dict[str, Any]]:
     """Run a multi-turn case directly against a bare LLM without safety/calculator tools."""
     history: List[Dict[str, str]] = [{"role": "system", "content": BARE_LLM_SYSTEM_PROMPT}]
@@ -759,6 +761,7 @@ def _run_case_bare_llm(
         history.append({"role": "user", "content": script_turn.user_msg})
 
         t0 = time.perf_counter()
+        reasoning_text = ""
         if use_mock:
             assistant_msg = _mock_bare_llm_reply(
                 case,
@@ -766,22 +769,35 @@ def _run_case_bare_llm(
                 script_turn.user_msg,
                 cumulative_user_text,
             )
+            if thinking != "off":
+                reasoning_text = (
+                    f"[Mock 裸模型推理 | 模型={model} | 强度={thinking}]\n"
+                    "未接入确定性红旗与用药冲突护栏。"
+                )
         else:
-            resp = client.chat_completion(history, model=model, mock_mode=False)
+            chat_kwargs: Dict[str, Any] = {"thinking": thinking} if thinking != "off" else {}
+            resp = client.chat_completion(
+                history,
+                model=model,
+                mock_mode=False,
+                **chat_kwargs,
+            )
             if resp.get("status") == "error":
                 raise RuntimeError(str(resp.get("message") or resp.get("error_code") or "LLM call error"))
             assistant_msg = str(resp.get("content", ""))
+            reasoning_text = str(resp.get("reasoning", "") or "")
         latency_ms = round((time.perf_counter() - t0) * 1000.0, 2)
 
         history.append({"role": "assistant", "content": assistant_msg})
-        turns_out.append(
-            {
-                "turn": script_turn.turn,
-                "user_msg": script_turn.user_msg,
-                "assistant_msg": assistant_msg,
-                "latency_ms": latency_ms,
-            }
-        )
+        turn_entry: Dict[str, Any] = {
+            "turn": script_turn.turn,
+            "user_msg": script_turn.user_msg,
+            "assistant_msg": assistant_msg,
+            "latency_ms": latency_ms,
+        }
+        if reasoning_text:
+            turn_entry["reasoning"] = reasoning_text
+        turns_out.append(turn_entry)
     return turns_out
 
 
@@ -860,6 +876,7 @@ def _run_case_harness_copilot(
     client: LLMClient,
     model: str,
     use_mock: bool,
+    thinking: str = "off",
 ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """Run a multi-turn case through the unified run_turn() clinical harness kernel."""
     history: List[Dict[str, str]] = []
@@ -879,6 +896,7 @@ def _run_case_harness_copilot(
             ctx,
             script_turn.user_msg,
             model=model,
+            thinking=thinking,
             output_mode="full",
             client=client,
             mock_mode=use_mock,
@@ -888,16 +906,18 @@ def _run_case_harness_copilot(
 
         history.append({"role": "user", "content": script_turn.user_msg})
         history.append({"role": "assistant", "content": turn_res.content})
-        turns_out.append(
-            {
-                "turn": script_turn.turn,
-                "user_msg": script_turn.user_msg,
-                "assistant_msg": turn_res.content,
-                "latency_ms": turn_res.latency_ms,
-                "blocked": turn_res.blocked,
-                "verification": turn_res.verification,
-            }
-        )
+        turn_entry: Dict[str, Any] = {
+            "turn": script_turn.turn,
+            "user_msg": script_turn.user_msg,
+            "assistant_msg": turn_res.content,
+            "latency_ms": turn_res.latency_ms,
+            "blocked": turn_res.blocked,
+            "verification": turn_res.verification,
+        }
+        if turn_res.reasoning:
+            turn_entry["reasoning"] = turn_res.reasoning
+            turn_entry["reasoning_verification"] = turn_res.reasoning_verification
+        turns_out.append(turn_entry)
     return turns_out, last_risk_report
 
 
@@ -914,6 +934,7 @@ def run_benchmark(
     case_ids: Optional[Sequence[str]] = None,
     extra_cases: Optional[Sequence[Tuple[BenchmarkCase, str]]] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    model_thinking: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Execute benchmark across specified models and modes, returning full report dict."""
     config = LLMConfig.from_env()
@@ -981,6 +1002,7 @@ def run_benchmark(
     done_items = 0
 
     for model in target_models:
+        model_think = normalize_thinking_level((model_thinking or {}).get(model, "off"))
         for mode in target_modes:
             case_results: List[Dict[str, Any]] = []
             run_latency_ms = 0.0
@@ -988,6 +1010,7 @@ def run_benchmark(
                 "run_label": f"{model} | {mode}",
                 "model": model,
                 "mode": mode,
+                "thinking": model_think,
                 "total_latency_ms": 0.0,
                 "summary": aggregate_summary(case_results),
                 "results": case_results,
@@ -997,11 +1020,18 @@ def run_benchmark(
             for case, visibility in loaded_cases:
                 case_latency_ms = 0.0
                 try:
+                    extra_think: Dict[str, Any] = (
+                        {"thinking": model_think} if model_think != "off" else {}
+                    )
                     if mode == "bare_llm":
-                        turns = _run_case_bare_llm(case, client, model, use_mock)
+                        turns = _run_case_bare_llm(
+                            case, client, model, use_mock, **extra_think
+                        )
                         final_risk_report = None
                     else:
-                        turns, final_risk_report = _run_case_harness_copilot(case, client, model, use_mock)
+                        turns, final_risk_report = _run_case_harness_copilot(
+                            case, client, model, use_mock, **extra_think
+                        )
 
                     case_latency_ms = round(sum(t["latency_ms"] for t in turns), 2)
                     run_latency_ms += case_latency_ms

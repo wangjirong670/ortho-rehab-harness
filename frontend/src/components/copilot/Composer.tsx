@@ -17,6 +17,7 @@ import type {
   ThinkingLevel,
 } from "../../api/types";
 import { Modal } from "../Modal";
+import { ModelThinkingPicker } from "../ModelThinkingPicker";
 
 interface ComposerProps {
   availableModels: string[];
@@ -33,13 +34,6 @@ interface ComposerProps {
     pii_action: "none" | "sanitized" | "override_raw";
   }) => Promise<void>;
 }
-
-const THINKING_LEVEL_LABELS: Array<{ key: ThinkingLevel; label: string }> = [
-  { key: "off", label: "关" },
-  { key: "low", label: "低" },
-  { key: "medium", label: "中" },
-  { key: "high", label: "高" },
-];
 
 function isLocalOrMockModel(model: string, mockMode: boolean): boolean {
   if (mockMode) return true;
@@ -58,9 +52,8 @@ export const Composer: React.FC<ComposerProps> = ({
 }) => {
   const [text, setText] = useState("");
   const [selectedModel, setSelectedModel] = useState(defaultModel || availableModels[0] || "");
-  const [thinking, setThinking] = useState<ThinkingLevel>("off");
+  const [modelThinking, setModelThinking] = useState<Record<string, ThinkingLevel>>({});
   const [outputMode, setOutputMode] = useState<OutputMode>("full");
-  const [dynamicCaps, setDynamicCaps] = useState<Record<string, ModelCapability>>({});
 
   const [piiFindings, setPiiFindings] = useState<PiiFinding[]>([]);
   const [piiDismissed, setPiiDismissed] = useState(false);
@@ -76,32 +69,6 @@ export const Composer: React.FC<ComposerProps> = ({
       setSelectedModel(defaultModel);
     }
   }, [defaultModel, selectedModel]);
-
-  const activeCap: ModelCapability | undefined =
-    modelCapabilities[selectedModel] || dynamicCaps[selectedModel];
-
-  useEffect(() => {
-    if (!selectedModel || modelCapabilities[selectedModel] || dynamicCaps[selectedModel]) {
-      return;
-    }
-    api
-      .getModelCapabilities(selectedModel)
-      .then((cap) => {
-        setDynamicCaps((prev) => ({ ...prev, [selectedModel]: cap }));
-      })
-      .catch(() => {
-        // non-fatal
-      });
-  }, [dynamicCaps, modelCapabilities, selectedModel]);
-
-  useEffect(() => {
-    if (!activeCap) return;
-    if (!activeCap.supports_thinking) {
-      setThinking("off");
-    } else if (!activeCap.supported_levels.includes(thinking)) {
-      setThinking(activeCap.default_level || activeCap.supported_levels[0] || "off");
-    }
-  }, [activeCap, thinking]);
 
   // Debounced live PII check
   useEffect(() => {
@@ -182,6 +149,12 @@ export const Composer: React.FC<ComposerProps> = ({
   ) => {
     const cleaned = payloadText.trim();
     if (!cleaned || disabled || streaming) return;
+    const chosenModel = selectedModel || defaultModel;
+    const cap = modelCapabilities[chosenModel];
+    const effectiveThinking: ThinkingLevel =
+      !mockMode && cap && !cap.supports_thinking
+        ? "off"
+        : modelThinking[chosenModel] || "off";
     setText("");
     setUndoText(null);
     setSanitizedApplied(false);
@@ -189,8 +162,8 @@ export const Composer: React.FC<ComposerProps> = ({
     setPiiDismissed(false);
     await onSend({
       content: cleaned,
-      model: selectedModel || defaultModel,
-      thinking,
+      model: chosenModel,
+      thinking: effectiveThinking,
       output_mode: outputMode,
       pii_action: piiAction,
     });
@@ -340,64 +313,25 @@ export const Composer: React.FC<ComposerProps> = ({
               </button>
             </div>
 
-            {/* Per-message model selector */}
-            <select
-              value={selectedModel}
+            {/* Unified Model + Expandable Thinking Picker */}
+            <ModelThinkingPicker
+              mode="single"
+              direction="up"
+              testId="copilot-model-picker"
+              availableModels={modelChoices}
+              selectedModels={selectedModel ? [selectedModel] : []}
+              modelCapabilities={modelCapabilities}
+              modelThinking={modelThinking}
+              mockMode={mockMode}
               disabled={controlsGreyed}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              title={controlsGreyed ? "简要筛查为纯确定性引擎，不调用大模型" : "选择本轮生成模型"}
-              className="max-w-[190px] rounded-xl border border-slate-200 bg-white px-2 py-1.5 font-mono text-[11px] text-slate-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-            >
-              {modelChoices.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-
-            {/* Live Capability-Driven Thinking Intensity Selector (D19) */}
-            {(() => {
-              const thinkingSupported = Boolean(activeCap?.supports_thinking) && !controlsGreyed;
-              const allowed = activeCap?.supported_levels || ["off"];
-              const tooltip = controlsGreyed
-                ? "简要筛查为纯确定性引擎，思考调节已置灰"
-                : activeCap?.note || "思考强度调节（关/低/中/高）";
-              return (
-                <div
-                  data-testid="thinking-selector"
-                  title={tooltip}
-                  className={`inline-flex items-center gap-0.5 rounded-xl border p-0.5 text-[11px] ${
-                    thinkingSupported
-                      ? "border-slate-200 bg-slate-100/80"
-                      : "cursor-not-allowed border-slate-200/70 bg-slate-100/70 opacity-60"
-                  }`}
-                >
-                  <span className="px-1.5 text-[10px] font-medium text-slate-500">思考</span>
-                  {THINKING_LEVEL_LABELS.map((item) => {
-                    const levelAllowed = thinkingSupported && allowed.includes(item.key);
-                    const active = thinking === item.key;
-                    return (
-                      <button
-                        key={item.key}
-                        type="button"
-                        disabled={!levelAllowed}
-                        data-testid={`thinking-level-${item.key}`}
-                        onClick={() => levelAllowed && setThinking(item.key)}
-                        className={`rounded-lg px-2 py-0.5 font-semibold transition ${
-                          active && thinkingSupported
-                            ? "bg-white text-cyan-800 shadow-sm"
-                            : levelAllowed
-                              ? "text-slate-600 hover:text-slate-900"
-                              : "cursor-not-allowed text-slate-400"
-                        }`}
-                      >
-                        {item.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              );
-            })()}
+              disabledTooltip="简要筛查为纯确定性引擎，不调用大模型"
+              onChangeModels={(next) => {
+                if (next[0]) setSelectedModel(next[0]);
+              }}
+              onChangeThinking={(m, level) =>
+                setModelThinking((prev) => ({ ...prev, [m]: level }))
+              }
+            />
           </div>
 
           <div className="flex items-center gap-1.5">

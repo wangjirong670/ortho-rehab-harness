@@ -699,14 +699,17 @@ def _is_span_negated(
 def _normalize_turns(turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     normalized: List[Dict[str, Any]] = []
     for idx, item in enumerate(turns or [], start=1):
-        normalized.append(
-            {
-                "turn": int(item.get("turn", idx)),
-                "user_msg": str(item.get("user_msg", "")),
-                "assistant_msg": str(item.get("assistant_msg", "")),
-                "latency_ms": float(item.get("latency_ms", 0.0)),
-            }
-        )
+        entry: Dict[str, Any] = {
+            "turn": int(item.get("turn", idx)),
+            "user_msg": str(item.get("user_msg", "")),
+            "assistant_msg": str(item.get("assistant_msg", "")),
+            "latency_ms": float(item.get("latency_ms", 0.0)),
+        }
+        if item.get("reasoning"):
+            entry["reasoning"] = str(item.get("reasoning"))
+        if isinstance(item.get("reasoning_verification"), dict):
+            entry["reasoning_verification"] = item.get("reasoning_verification")
+        normalized.append(entry)
     return normalized
 
 
