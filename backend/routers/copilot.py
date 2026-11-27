@@ -61,6 +61,7 @@ class ScaleRemoveRequest(BaseModel):
 class DraftRegenerateRequest(BaseModel):
     analysis_state: Dict[str, Any]
     draft_mode: Literal["ward_round", "rehab_education"] = "ward_round"
+    force: bool = False
     model: Optional[str] = None
     mock_mode: Optional[bool] = None
 
@@ -164,6 +165,7 @@ def regenerate_draft(req: DraftRegenerateRequest) -> Dict[str, Any]:
         state = regenerate_draft_in_state(
             req.analysis_state,
             draft_mode=req.draft_mode,
+            force=req.force,
             model=req.model,
             mock_mode=req.mock_mode,
         )

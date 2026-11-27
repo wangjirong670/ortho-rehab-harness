@@ -7,6 +7,7 @@ import io
 import re
 import xml.etree.ElementTree as ET
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
@@ -406,9 +407,58 @@ def summarize_contraindicated_capsules(unified_alerts: List[Dict[str, Any]]) -> 
     return tags[:8]
 
 
+def _enrich_draft_entry(draft_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure a draft entry always contains plain_text and generated_at fields."""
+    entry = dict(draft_result or {})
+    content = str(entry.get("content") or "")
+    entry["plain_text"] = markdown_to_plain_text(content)
+    if not entry.get("generated_at"):
+        entry["generated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+    return entry
+
+
+def _resolve_draft_caches(state: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, bool]]:
+    """Extract and normalize drafts_by_mode + draft_stale_by_mode, seeding legacy states if needed."""
+    raw_cache = state.get("drafts_by_mode")
+    drafts_by_mode: Dict[str, Dict[str, Any]] = {}
+    if isinstance(raw_cache, dict):
+        for mode_key, draft_val in raw_cache.items():
+            if mode_key in DRAFT_MODE_LABELS and isinstance(draft_val, dict) and draft_val.get("content"):
+                drafts_by_mode[mode_key] = _enrich_draft_entry(draft_val)
+
+    raw_stale = state.get("draft_stale_by_mode")
+    draft_stale_by_mode: Dict[str, bool] = {}
+    if isinstance(raw_stale, dict):
+        for mode_key, is_stale in raw_stale.items():
+            if mode_key in DRAFT_MODE_LABELS:
+                draft_stale_by_mode[mode_key] = bool(is_stale)
+
+    # Legacy compatibility: seed cache from top-level draft if present on a non-fast-scan state
+    if not drafts_by_mode and not state.get("fast_scan_only"):
+        top_draft = state.get("draft")
+        if isinstance(top_draft, dict) and top_draft.get("content"):
+            top_mode = str(top_draft.get("mode") or state.get("draft_mode") or "ward_round")
+            if top_mode in DRAFT_MODE_LABELS:
+                drafts_by_mode[top_mode] = _enrich_draft_entry(top_draft)
+                draft_stale_by_mode.setdefault(top_mode, bool(state.get("draft_stale", False)))
+
+    for mode_key in drafts_by_mode:
+        draft_stale_by_mode.setdefault(mode_key, False)
+
+    return drafts_by_mode, draft_stale_by_mode
+
+
 def format_copilot_response(state: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize a copilot analysis state dict to match the CopilotAnalysisResponse API contract."""
     unified_alerts = list(state.get("unified_alerts") or [])
+    drafts_by_mode, draft_stale_by_mode = _resolve_draft_caches(state)
+    raw_draft = state.get("draft") or {}
+    active_draft = _enrich_draft_entry(raw_draft) if isinstance(raw_draft, dict) and raw_draft else {}
+    active_mode = str(state.get("draft_mode") or active_draft.get("mode") or "ward_round")
+    if active_draft and active_mode in DRAFT_MODE_LABELS and active_mode not in drafts_by_mode and not state.get("fast_scan_only"):
+        drafts_by_mode[active_mode] = copy.deepcopy(active_draft)
+        draft_stale_by_mode.setdefault(active_mode, bool(state.get("draft_stale", False)))
+
     return {
         "raw_text": str(state.get("raw_text") or ""),
         "fast_scan_only": bool(state.get("fast_scan_only", False)),
@@ -417,9 +467,13 @@ def format_copilot_response(state: Dict[str, Any]) -> Dict[str, Any]:
         "scale_results": list(state.get("scale_results") or []),
         "unified_alerts": unified_alerts,
         "contraindicated_capsules": summarize_contraindicated_capsules(unified_alerts),
-        "draft": state.get("draft") or {},
-        "draft_mode": str(state.get("draft_mode") or "ward_round"),
+        "draft": active_draft,
+        "draft_mode": active_mode,
         "draft_stale": bool(state.get("draft_stale", False)),
+        "draft_plain_text": str(active_draft.get("plain_text") or ""),
+        "drafts_by_mode": drafts_by_mode,
+        "draft_stale_by_mode": draft_stale_by_mode,
+        "draft_cache_hit": bool(state.get("draft_cache_hit", False)),
         "trace": state.get("trace") or {},
     }
 
@@ -432,6 +486,18 @@ def run_fast_safety_scan(raw_text: str) -> Dict[str, Any]:
 
     risk_report = scan_clinical_risks(raw_text=cleaned_text)
     unified_alerts = collect_unified_alerts(risk_report, [])
+    placeholder_draft = _enrich_draft_entry(
+        {
+            "mode": "ward_round",
+            "mode_label": DRAFT_MODE_LABELS["ward_round"],
+            "content": "⚡ 当前为「极速安全筛查」结果，仅运行确定性规则引擎（零 LLM 等待）。如需生成量表算分与文书草稿，请点击上方「🚀 开始分析」。",
+            "blocked": False,
+            "safety_check": {"passed": True, "blocked": False, "violations": []},
+            "model": "deterministic-only",
+            "mock": True,
+            "usage": {},
+        }
+    )
     return {
         "raw_text": cleaned_text,
         "fast_scan_only": True,
@@ -451,18 +517,13 @@ def run_fast_safety_scan(raw_text: str) -> Dict[str, Any]:
         "scale_results": [],
         "unified_alerts": unified_alerts,
         "contraindicated_capsules": summarize_contraindicated_capsules(unified_alerts),
-        "draft": {
-            "mode": "ward_round",
-            "mode_label": DRAFT_MODE_LABELS["ward_round"],
-            "content": "⚡ 当前为「极速安全筛查」结果，仅运行确定性规则引擎（零 LLM 等待）。如需生成量表算分与文书草稿，请点击上方「🚀 开始分析」。",
-            "blocked": False,
-            "safety_check": {"passed": True, "blocked": False, "violations": []},
-            "model": "deterministic-only",
-            "mock": True,
-            "usage": {},
-        },
+        "draft": placeholder_draft,
         "draft_mode": "ward_round",
         "draft_stale": False,
+        "draft_plain_text": placeholder_draft["plain_text"],
+        "drafts_by_mode": {},
+        "draft_stale_by_mode": {},
+        "draft_cache_hit": False,
         "trace": {
             "extraction_model": "deterministic-only",
             "extraction_mock": True,
@@ -935,14 +996,16 @@ def run_copilot_analysis(
         scales_path=scales_path,
     )
 
-    draft_result = generate_draft_document(
-        draft_mode,
-        extracted_note,
-        risk_report,
-        scale_results,
-        model=model,
-        mock_mode=mock_mode,
-        client=active_client,
+    draft_result = _enrich_draft_entry(
+        generate_draft_document(
+            draft_mode,
+            extracted_note,
+            risk_report,
+            scale_results,
+            model=model,
+            mock_mode=mock_mode,
+            client=active_client,
+        )
     )
 
     unified_alerts = collect_unified_alerts(risk_report, scale_results)
@@ -957,6 +1020,10 @@ def run_copilot_analysis(
         "draft": draft_result,
         "draft_mode": draft_mode,
         "draft_stale": False,
+        "draft_plain_text": draft_result["plain_text"],
+        "drafts_by_mode": {draft_mode: copy.deepcopy(draft_result)},
+        "draft_stale_by_mode": {draft_mode: False},
+        "draft_cache_hit": False,
         "trace": {
             "extraction_model": extract_res.get("model"),
             "extraction_mock": extract_res.get("mock"),
@@ -1024,24 +1091,37 @@ def recalculate_scale_in_state(
     target_mode = draft_mode or new_state.get("draft_mode", "ward_round")
     new_state["draft_mode"] = target_mode
 
+    drafts_by_mode, draft_stale_by_mode = _resolve_draft_caches(new_state)
+    for cached_mode in list(drafts_by_mode.keys()):
+        draft_stale_by_mode[cached_mode] = True
+
     if refresh_draft:
-        draft_result = generate_draft_document(
-            target_mode,
-            new_state["extracted_note"],
-            new_state.get("risk_report", {}),
-            scale_results,
-            model=model,
-            mock_mode=mock_mode,
-            client=client,
+        draft_result = _enrich_draft_entry(
+            generate_draft_document(
+                target_mode,
+                new_state["extracted_note"],
+                new_state.get("risk_report", {}),
+                scale_results,
+                model=model,
+                mock_mode=mock_mode,
+                client=client,
+            )
         )
+        drafts_by_mode[target_mode] = copy.deepcopy(draft_result)
+        draft_stale_by_mode[target_mode] = False
         new_state["draft"] = draft_result
         new_state["draft_stale"] = False
+        new_state["draft_plain_text"] = draft_result["plain_text"]
+        new_state["draft_cache_hit"] = False
         new_state.setdefault("trace", {})["draft_model"] = draft_result.get("model")
         new_state["trace"]["draft_mock"] = draft_result.get("mock")
         new_state["trace"]["draft_usage"] = draft_result.get("usage", {})
     else:
         new_state["draft_stale"] = True
+        new_state["draft_cache_hit"] = False
 
+    new_state["drafts_by_mode"] = drafts_by_mode
+    new_state["draft_stale_by_mode"] = draft_stale_by_mode
     return new_state
 
 
@@ -1067,7 +1147,14 @@ def remove_scale_from_state(
     )
     new_state["unified_alerts"] = unified_alerts
     new_state["contraindicated_capsules"] = summarize_contraindicated_capsules(unified_alerts)
+
+    drafts_by_mode, draft_stale_by_mode = _resolve_draft_caches(new_state)
+    for cached_mode in list(drafts_by_mode.keys()):
+        draft_stale_by_mode[cached_mode] = True
+    new_state["drafts_by_mode"] = drafts_by_mode
+    new_state["draft_stale_by_mode"] = draft_stale_by_mode
     new_state["draft_stale"] = True
+    new_state["draft_cache_hit"] = False
     return new_state
 
 
@@ -1075,26 +1162,51 @@ def regenerate_draft_in_state(
     analysis_state: Dict[str, Any],
     draft_mode: str = "ward_round",
     *,
+    force: bool = False,
     model: Optional[str] = None,
     mock_mode: Optional[bool] = None,
     client: Optional[LLMClient] = None,
 ) -> Dict[str, Any]:
-    """Regenerate draft document inside existing analysis state for a chosen mode."""
+    """Switch or regenerate draft document inside existing analysis state with lossless per-mode caching."""
     if draft_mode not in DRAFT_MODE_LABELS:
         raise ValueError(f"不支持的文书模式: {draft_mode}")
     new_state = copy.deepcopy(analysis_state)
-    draft_result = generate_draft_document(
-        draft_mode,
-        new_state.get("extracted_note") or {},
-        new_state.get("risk_report") or {},
-        list(new_state.get("scale_results") or []),
-        model=model,
-        mock_mode=mock_mode,
-        client=client,
+    drafts_by_mode, draft_stale_by_mode = _resolve_draft_caches(new_state)
+
+    if not force and draft_mode in drafts_by_mode:
+        cached_draft = _enrich_draft_entry(copy.deepcopy(drafts_by_mode[draft_mode]))
+        drafts_by_mode[draft_mode] = copy.deepcopy(cached_draft)
+        mode_stale = bool(draft_stale_by_mode.get(draft_mode, False))
+        new_state["draft"] = cached_draft
+        new_state["draft_mode"] = draft_mode
+        new_state["draft_stale"] = mode_stale
+        new_state["draft_plain_text"] = cached_draft["plain_text"]
+        new_state["drafts_by_mode"] = drafts_by_mode
+        new_state["draft_stale_by_mode"] = draft_stale_by_mode
+        new_state["draft_cache_hit"] = True
+        return new_state
+
+    draft_result = _enrich_draft_entry(
+        generate_draft_document(
+            draft_mode,
+            new_state.get("extracted_note") or {},
+            new_state.get("risk_report") or {},
+            list(new_state.get("scale_results") or []),
+            model=model,
+            mock_mode=mock_mode,
+            client=client,
+        )
     )
+    drafts_by_mode[draft_mode] = copy.deepcopy(draft_result)
+    draft_stale_by_mode[draft_mode] = False
+
     new_state["draft"] = draft_result
     new_state["draft_mode"] = draft_mode
     new_state["draft_stale"] = False
+    new_state["draft_plain_text"] = draft_result["plain_text"]
+    new_state["drafts_by_mode"] = drafts_by_mode
+    new_state["draft_stale_by_mode"] = draft_stale_by_mode
+    new_state["draft_cache_hit"] = False
     new_state.setdefault("trace", {})["draft_model"] = draft_result.get("model")
     new_state["trace"]["draft_mock"] = draft_result.get("mock")
     new_state["trace"]["draft_usage"] = draft_result.get("usage", {})

@@ -18,6 +18,7 @@ app_benchmark/results/
 results/
 logs/
 custom_cases/
+case_archives/
 
 # Frontend build & dependencies
 frontend/node_modules/

@@ -34,7 +34,7 @@ core_tools/ (schemas / calculator / rule_scanner / llm_client)
    - 任何涉及 `core_tools/rule_scanner.py` 或 `app_benchmark/evaluator.py` 的否定判定改动，**必须同步补充正反双向回归单测**（既要防止“不坐矮凳/勿热敷/不能停药”被误杀或误抑制，也要封堵“不得不/不妨/不如”等双重否定或委婉绕过）。
 3. **数据脱敏与公私隔离**：
    - 代码、示例、测试用例与截图中仅允许使用虚构脱敏数据，严禁出现真实患者姓名、手机号、身份证号、住院号或可识别医院信息。
-   - `.gitignore` 与 `packaging/build_release.py` 必须严格屏蔽 `.env`、`.env.*`（保留 `.env.example`）、`*.secret`、`*.key`、`app_benchmark/test_cases/private/*`（仅留 `README.md` 与 `.gitkeep`）、`results/`、`logs/`、`custom_cases/`、`frontend/node_modules/`、`frontend/dist/`、`dist/`、`build/`、`release_artifacts/`。
+   - `.gitignore` 与 `packaging/build_release.py` 必须严格屏蔽 `.env`、`.env.*`（保留 `.env.example`）、`*.secret`、`*.key`、`app_benchmark/test_cases/private/*`（仅留 `README.md` 与 `.gitkeep`）、`results/`、`logs/`、`custom_cases/`、`case_archives/`、`frontend/node_modules/`、`frontend/dist/`、`dist/`、`build/`、`release_artifacts/`。
 4. **仓库密钥零留存规范**：
    - **严禁在源码根目录 `.env` 或仓库内 `dist/` 目录中长期存放真实云端 API Key**（防止误打包或测试意外消耗真实额度）。
    - 真人使用真实云端 API 实测绿色版时，应将 `release_artifacts/` 产物**独立解压至仓库外目录**再配置密钥运行；仓库内日常开发与自动化回归测试默认走 `LLM_MOCK_MODE=true` 或本机离线 Ollama。

@@ -197,6 +197,8 @@ export interface DraftDocument {
   mode: DraftMode | string;
   mode_label?: string;
   content: string;
+  plain_text?: string;
+  generated_at?: string;
   blocked: boolean;
   safety_check?: {
     passed: boolean;
@@ -209,6 +211,8 @@ export interface DraftDocument {
   usage?: Record<string, unknown>;
 }
 
+export type DraftResult = DraftDocument;
+
 export interface CopilotAnalysisResponse {
   raw_text: string;
   fast_scan_only?: boolean;
@@ -220,12 +224,66 @@ export interface CopilotAnalysisResponse {
   draft: DraftDocument;
   draft_mode: DraftMode | string;
   draft_stale?: boolean;
+  draft_plain_text?: string;
+  drafts_by_mode?: Partial<Record<DraftMode, DraftResult>>;
+  draft_stale_by_mode?: Partial<Record<DraftMode, boolean>>;
+  draft_cache_hit?: boolean;
   trace?: Record<string, unknown>;
 }
 
 export interface HandoverResponse {
   handover_text: string;
   draft_plain_text: string;
+}
+
+// ---------------- Case Workspace Types ----------------
+
+export interface CaseRevisionSummary {
+  rev: number;
+  timestamp: string;
+  note?: string;
+  raw_text?: string;
+  alert_count?: number;
+  draft_modes_ready?: string[];
+  analysis_state?: CopilotAnalysisResponse;
+}
+
+export interface CaseWorkspaceSummary {
+  case_id: string;
+  title: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+  revision_count: number;
+  alert_count: number;
+  critical_count: number;
+  scale_count: number;
+  draft_modes_ready: string[];
+  snippet: string;
+}
+
+export interface CaseWorkspaceRecord extends CaseWorkspaceSummary {
+  schema_version: number;
+  raw_text: string;
+  draft_mode: DraftMode | string;
+  analysis_state: CopilotAnalysisResponse;
+  revisions: CaseRevisionSummary[];
+}
+
+export interface CaseListResponse {
+  archives_dir: string;
+  cases: CaseWorkspaceSummary[];
+}
+
+export interface SaveCaseWorkspaceRequest {
+  case_id?: string;
+  title?: string;
+  tags?: string[];
+  raw_text: string;
+  draft_mode: DraftMode | string;
+  analysis_state: CopilotAnalysisResponse;
+  revision_note?: string;
+  record_revision?: boolean;
 }
 
 // ---------------- Benchmark Types ----------------

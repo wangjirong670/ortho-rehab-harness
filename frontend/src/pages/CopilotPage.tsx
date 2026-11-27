@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Calculator,
@@ -9,19 +9,26 @@ import {
   Copy,
   Download,
   FileText,
+  FolderOpen,
+  FolderPlus,
   History,
+  Pencil,
   Plus,
   RefreshCw,
+  Search,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
   Trash2,
   Undo2,
   Upload,
+  X,
   Zap,
 } from "lucide-react";
-import { api, STORAGE_KEYS } from "../api/client";
+import { api } from "../api/client";
 import type {
+  CaseWorkspaceRecord,
+  CaseWorkspaceSummary,
   CopilotAnalysisResponse,
   DemoCaseItem,
   DraftMode,
@@ -51,33 +58,30 @@ interface CopilotPageProps {
   actionLabels?: Record<string, string>;
 }
 
-interface HistoryEntry {
-  id: string;
-  title: string;
-  timestamp: string;
-  alertCount: number;
-  state: CopilotAnalysisResponse;
-}
-
 type RightTab = "timeline" | "scales" | "draft" | "trace";
 
-function loadLocalHistory(): HistoryEntry[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEYS.COPILOT_HISTORY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.slice(0, 5) : [];
-  } catch {
-    return [];
-  }
+function nowClock(): string {
+  return new Date().toTimeString().slice(0, 8);
 }
 
-function saveLocalHistory(entries: HistoryEntry[]): void {
-  try {
-    localStorage.setItem(STORAGE_KEYS.COPILOT_HISTORY, JSON.stringify(entries.slice(0, 5)));
-  } catch {
-    // ignore quota errors
+function formatIsoClock(iso?: string): string {
+  if (!iso) return nowClock();
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) {
+    return iso.slice(11, 19) || nowClock();
   }
+  return d.toTimeString().slice(0, 8);
+}
+
+function formatShortDateTime(iso?: string): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 16).replace("T", " ");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${mm}-${dd} ${hh}:${mi}`;
 }
 
 function deriveFallbackCapsules(alerts: UnifiedAlert[]): string[] {
@@ -117,7 +121,25 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
   const [piiFeedback, setPiiFeedback] = useState<string | null>(null);
 
   const [analysis, setAnalysis] = useState<CopilotAnalysisResponse | null>(null);
-  const [history, setHistory] = useState<HistoryEntry[]>(() => loadLocalHistory());
+
+  // Local Case Workspace State
+  const [activeCase, setActiveCase] = useState<CaseWorkspaceRecord | null>(null);
+  const [savedTimeLabel, setSavedTimeLabel] = useState<string | null>(null);
+  const [savingCase, setSavingCase] = useState(false);
+  const [caseList, setCaseList] = useState<CaseWorkspaceSummary[]>([]);
+  const [archivesDir, setArchivesDir] = useState<string>("");
+  const [caseSearch, setCaseSearch] = useState("");
+  const [highRiskOnly, setHighRiskOnly] = useState(false);
+  const [loadingCases, setLoadingCases] = useState(false);
+  const [editingCaseId, setEditingCaseId] = useState<string | null>(null);
+  const [editingCaseTitle, setEditingCaseTitle] = useState("");
+  const [confirmDeleteCaseId, setConfirmDeleteCaseId] = useState<string | null>(null);
+
+  // Modals: Follow-up & Revisions
+  const [followupModalOpen, setFollowupModalOpen] = useState(false);
+  const [followupDate, setFollowupDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [followupText, setFollowupText] = useState("");
+  const [revisionsModalOpen, setRevisionsModalOpen] = useState(false);
 
   const [activeTab, setActiveTab] = useState<RightTab>("timeline");
   const [alertsExpanded, setAlertsExpanded] = useState(false);
@@ -130,12 +152,32 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
   const [copyToast, setCopyToast] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const importCaseInputRef = useRef<HTMLInputElement | null>(null);
 
   const scaleSpecMap = useMemo(() => {
     const map = new Map<string, ScaleSpec>();
     for (const s of scalesCatalog) map.set(s.scale_id, s);
     return map;
   }, [scalesCatalog]);
+
+  const refreshCaseList = useCallback(
+    async (qVal = caseSearch, riskVal = highRiskOnly) => {
+      setLoadingCases(true);
+      try {
+        const res = await api.listCaseWorkspaces({
+          q: qVal,
+          high_risk_only: riskVal,
+        });
+        setCaseList(res.cases || []);
+        setArchivesDir(res.archives_dir || "");
+      } catch {
+        // non-fatal if backend offline initially
+      } finally {
+        setLoadingCases(false);
+      }
+    },
+    [caseSearch, highRiskOnly]
+  );
 
   useEffect(() => {
     let active = true;
@@ -151,6 +193,14 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
       active = false;
     };
   }, []);
+
+  // Load & filter Case Workspace list (debounced on search input)
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void refreshCaseList(caseSearch, highRiskOnly);
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [caseSearch, highRiskOnly, refreshCaseList]);
 
   // Debounced PII detection on rawText changes
   useEffect(() => {
@@ -174,31 +224,78 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
 
   const showToast = (msg: string) => {
     setCopyToast(msg);
-    window.setTimeout(() => setCopyToast(null), 2400);
+    window.setTimeout(() => setCopyToast(null), 2600);
   };
 
-  const pushHistory = (state: CopilotAnalysisResponse, prefix = "") => {
-    const note = state.extracted_note || {};
-    const snippet = (
-      note.chief_complaint ||
-      state.raw_text?.slice(0, 28) ||
-      "脱敏病历"
-    ).slice(0, 24);
-    const now = new Date();
-    const ts = now.toTimeString().slice(0, 8);
-    const entry: HistoryEntry = {
-      id: `${Date.now()}`,
-      title: `${prefix}${snippet}`,
-      timestamp: ts,
-      alertCount: (state.unified_alerts || []).length,
-      state,
-    };
-    const next = [entry, ...history].slice(0, 5);
-    setHistory(next);
-    saveLocalHistory(next);
+  const applyLoadedCase = (record: CaseWorkspaceRecord) => {
+    setActiveCase(record);
+    setRawText(record.raw_text || "");
+    const nextMode = ((record.draft_mode ||
+      record.analysis_state?.draft_mode ||
+      "ward_round") as DraftMode);
+    setDraftMode(nextMode);
+    setAnalysis(record.analysis_state || null);
+    setAlertsExpanded(false);
+    setExpandedScaleEditorIdx(null);
+    setActiveDemoId(null);
+    setPreSanitizeBackup(null);
+    setPiiFeedback(null);
+    setErrorMsg(null);
+    setSavedTimeLabel(formatIsoClock(record.updated_at));
+  };
+
+  const persistCaseWorkspace = async (
+    nextRawText: string,
+    nextDraftMode: DraftMode,
+    nextAnalysis: CopilotAnalysisResponse,
+    opts?: {
+      recordRevision?: boolean;
+      revisionNote?: string;
+      caseIdOverride?: string | null;
+    }
+  ): Promise<CaseWorkspaceRecord | null> => {
+    if (!nextRawText.trim()) return null;
+    const targetCaseId =
+      opts?.caseIdOverride !== undefined ? opts.caseIdOverride : activeCase?.case_id;
+    setSavingCase(true);
+    try {
+      const saved = await api.saveCaseWorkspace({
+        case_id: targetCaseId || undefined,
+        title: targetCaseId ? activeCase?.title : undefined,
+        raw_text: nextRawText,
+        draft_mode: nextDraftMode,
+        analysis_state: nextAnalysis,
+        record_revision: opts?.recordRevision ?? false,
+        revision_note: opts?.revisionNote,
+      });
+      setActiveCase(saved);
+      setSavedTimeLabel(formatIsoClock(saved.updated_at));
+      void refreshCaseList();
+      return saved;
+    } catch {
+      // Auto-archive failure should not block clinical workflow
+      return null;
+    } finally {
+      setSavingCase(false);
+    }
+  };
+
+  const handleNewBlankCase = () => {
+    setActiveCase(null);
+    setRawText("");
+    setAnalysis(null);
+    setActiveDemoId(null);
+    setPreSanitizeBackup(null);
+    setPiiFeedback(null);
+    setSavedTimeLabel(null);
+    setErrorMsg(null);
+    setAlertsExpanded(false);
+    setExpandedScaleEditorIdx(null);
   };
 
   const handleSelectDemo = (c: DemoCaseItem) => {
+    setActiveCase(null);
+    setSavedTimeLabel(null);
     setRawText(c.raw_text);
     setActiveDemoId(c.id);
     setDraftMode(c.default_draft_mode || "ward_round");
@@ -214,6 +311,8 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
     setErrorMsg(null);
     try {
       const res = await api.uploadClinicalFile(file);
+      setActiveCase(null);
+      setSavedTimeLabel(null);
       setRawText(res.text);
       setActiveDemoId(null);
       setPreSanitizeBackup(null);
@@ -223,6 +322,94 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
     } finally {
       setLoadingAction(null);
       e.target.value = "";
+    }
+  };
+
+  const handleImportCaseJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLoadingAction("import-case");
+    setErrorMsg(null);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const imported = await api.importCaseWorkspace(parsed);
+      applyLoadedCase(imported);
+      void refreshCaseList();
+      showToast(`已导入病例档案「${imported.title}」`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "病例档案 JSON 导入失败");
+    } finally {
+      setLoadingAction(null);
+      e.target.value = "";
+    }
+  };
+
+  const handleOpenCase = async (caseId: string) => {
+    setLoadingAction(`open-${caseId}`);
+    setErrorMsg(null);
+    try {
+      const record = await api.getCaseWorkspace(caseId);
+      applyLoadedCase(record);
+      showToast(`已载入档案「${record.title}」（零模型秒级还原）`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "加载本地病例档案失败");
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const handleRenameCase = async (caseId: string) => {
+    const nextTitle = editingCaseTitle.trim();
+    if (!nextTitle) {
+      setEditingCaseId(null);
+      return;
+    }
+    try {
+      const updated = await api.updateCaseWorkspaceMeta(caseId, { title: nextTitle });
+      if (activeCase?.case_id === caseId) {
+        setActiveCase(updated);
+      }
+      setEditingCaseId(null);
+      void refreshCaseList();
+      showToast("档案名称已更新");
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "重命名失败");
+    }
+  };
+
+  const handleExportCase = async (caseId: string) => {
+    try {
+      const archive = await api.exportCaseWorkspace(caseId);
+      const blob = new Blob([JSON.stringify(archive, null, 2)], {
+        type: "application/json;charset=utf-8",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${archive.case_id}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast(`已导出 ${archive.case_id}.json`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "导出病例档案失败");
+    }
+  };
+
+  const handleDeleteCase = async (caseId: string) => {
+    try {
+      await api.deleteCaseWorkspace(caseId);
+      if (activeCase?.case_id === caseId) {
+        setActiveCase(null);
+        setSavedTimeLabel(null);
+      }
+      setConfirmDeleteCaseId(null);
+      void refreshCaseList();
+      showToast("已删除本地病例档案");
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "删除病例档案失败");
     }
   };
 
@@ -267,7 +454,10 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
       setAnalysis(res);
       setAlertsExpanded((res.unified_alerts || []).length > 0);
       setActiveTab("timeline");
-      pushHistory(res, "[极速] ");
+      void persistCaseWorkspace(rawText, draftMode, res, {
+        recordRevision: true,
+        revisionNote: "极速安全筛查",
+      });
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "极速筛查失败");
     } finally {
@@ -275,8 +465,9 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
     }
   };
 
-  const handleAnalyze = async () => {
-    if (!rawText.trim()) {
+  const handleAnalyze = async (overrideText?: string, overrideCaseId?: string | null) => {
+    const targetText = overrideText ?? rawText;
+    if (!targetText.trim()) {
       setErrorMsg("请先输入或选择一份病历文本。");
       return;
     }
@@ -284,7 +475,7 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
     setErrorMsg(null);
     try {
       const res = await api.analyzeCopilot({
-        raw_text: rawText,
+        raw_text: targetText,
         draft_mode: draftMode,
         model: activeModel || undefined,
         mock_mode: mockMode,
@@ -293,7 +484,11 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
       setAlertsExpanded(false);
       setExpandedScaleEditorIdx(null);
       setActiveTab("timeline");
-      pushHistory(res);
+      void persistCaseWorkspace(targetText, draftMode, res, {
+        recordRevision: true,
+        revisionNote: "完整临床分析",
+        caseIdOverride: overrideCaseId,
+      });
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "临床分析执行失败");
     } finally {
@@ -311,13 +506,14 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
     setLoadingAction("scale");
     setErrorMsg(null);
     try {
+      const activeMode = (analysis.draft_mode as DraftMode) || draftMode;
       const next = await api.recalculateScale({
         analysis_state: analysis,
         scale_id: scaleId,
         updated_params: updatedParams,
         scale_index: scaleIndex,
         refresh_draft: refreshDraft,
-        draft_mode: (analysis.draft_mode as DraftMode) || draftMode,
+        draft_mode: activeMode,
         model: activeModel || undefined,
         mock_mode: mockMode,
       });
@@ -326,7 +522,11 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
       if (scaleIndex === undefined) {
         setAddScaleId("");
       }
-      showToast(refreshDraft ? "量表已重算并刷新文书草稿" : "量表已重算");
+      showToast(refreshDraft ? "量表已重算并刷新当前文书" : "量表已重算（文书待刷新）");
+      void persistCaseWorkspace(next.raw_text || rawText, activeMode, next, {
+        recordRevision: false,
+        revisionNote: refreshDraft ? "重算量表并刷新文书" : "更新量表评估",
+      });
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "量表重算失败");
     } finally {
@@ -345,6 +545,11 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
       });
       setAnalysis(next);
       setExpandedScaleEditorIdx(null);
+      const activeMode = (next.draft_mode as DraftMode) || draftMode;
+      void persistCaseWorkspace(next.raw_text || rawText, activeMode, next, {
+        recordRevision: false,
+        revisionNote: "移除量表评估",
+      });
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "移除量表失败");
     } finally {
@@ -352,7 +557,60 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
     }
   };
 
-  const handleRegenerateDraft = async (targetMode: DraftMode) => {
+  const handleSwitchDraftMode = async (targetMode: DraftMode) => {
+    setDraftMode(targetMode);
+    if (!analysis) return;
+
+    const cachedDraft = analysis.drafts_by_mode?.[targetMode];
+    if (cachedDraft) {
+      const isStale = Boolean(analysis.draft_stale_by_mode?.[targetMode]);
+      const nextState: CopilotAnalysisResponse = {
+        ...analysis,
+        draft: cachedDraft,
+        draft_mode: targetMode,
+        draft_stale: isStale,
+        draft_plain_text: cachedDraft.plain_text ?? analysis.draft_plain_text,
+        draft_cache_hit: true,
+      };
+      setAnalysis(nextState);
+      showToast(`已秒切「${DRAFT_MODE_LABELS[targetMode] || targetMode}」（本地缓存命中）`);
+      if (activeCase?.case_id) {
+        void persistCaseWorkspace(nextState.raw_text || rawText, targetMode, nextState, {
+          recordRevision: false,
+          revisionNote: `切换文书模式`,
+        });
+      }
+      return;
+    }
+
+    setLoadingAction("draft");
+    setErrorMsg(null);
+    try {
+      const next = await api.regenerateDraft({
+        analysis_state: analysis,
+        draft_mode: targetMode,
+        model: activeModel || undefined,
+        mock_mode: mockMode,
+        force: false,
+      });
+      setAnalysis(next);
+      showToast(
+        next.draft_cache_hit
+          ? `已切换「${DRAFT_MODE_LABELS[targetMode] || targetMode}」（缓存命中）`
+          : `已生成「${DRAFT_MODE_LABELS[targetMode] || targetMode}」`
+      );
+      void persistCaseWorkspace(next.raw_text || rawText, targetMode, next, {
+        recordRevision: false,
+        revisionNote: `生成${DRAFT_MODE_LABELS[targetMode] || targetMode}`,
+      });
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "文书切换生成失败");
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const handleForceRegenerateDraft = async (targetMode: DraftMode) => {
     if (!analysis) return;
     setLoadingAction("draft");
     setErrorMsg(null);
@@ -363,11 +621,61 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
         draft_mode: targetMode,
         model: activeModel || undefined,
         mock_mode: mockMode,
+        force: true,
       });
       setAnalysis(next);
-      showToast(`已生成「${DRAFT_MODE_LABELS[targetMode] || targetMode}」`);
+      showToast(`已重新生成「${DRAFT_MODE_LABELS[targetMode] || targetMode}」`);
+      void persistCaseWorkspace(next.raw_text || rawText, targetMode, next, {
+        recordRevision: false,
+        revisionNote: `重新生成${DRAFT_MODE_LABELS[targetMode] || targetMode}`,
+      });
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "文书重新生成失败");
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const handleSubmitFollowup = async (analyzeAfter: boolean) => {
+    if (!activeCase || !followupText.trim()) return;
+    setLoadingAction("followup");
+    setErrorMsg(null);
+    try {
+      const updated = await api.appendCaseFollowup(activeCase.case_id, {
+        visit_date: followupDate.trim() || undefined,
+        followup_text: followupText.trim(),
+      });
+      setActiveCase(updated);
+      setRawText(updated.raw_text);
+      setSavedTimeLabel(formatIsoClock(updated.updated_at));
+      setFollowupText("");
+      setFollowupModalOpen(false);
+      void refreshCaseList();
+      if (analyzeAfter) {
+        setLoadingAction(null);
+        await handleAnalyze(updated.raw_text, updated.case_id);
+      } else {
+        showToast("已追加新诊次记录，可点击「开始完整分析」更新评估");
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "追加复诊记录失败");
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const handleRestoreRevision = async (rev: number) => {
+    if (!activeCase) return;
+    setLoadingAction(`restore-${rev}`);
+    setErrorMsg(null);
+    try {
+      const restored = await api.restoreCaseRevision(activeCase.case_id, rev);
+      applyLoadedCase(restored);
+      setRevisionsModalOpen(false);
+      void refreshCaseList();
+      showToast(`已恢复至历史版本 v${rev}`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "恢复历史版本失败");
     } finally {
       setLoadingAction(null);
     }
@@ -435,6 +743,11 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
       : addableScales[0]?.scale_id || "";
   const selectedAddSpec = scaleSpecMap.get(effectiveAddScaleId) || null;
 
+  const activeDraftMode = ((analysis?.draft_mode || draftMode) as DraftMode);
+  const currentDraftStale = Boolean(
+    analysis?.draft_stale_by_mode?.[activeDraftMode] ?? analysis?.draft_stale
+  );
+
   return (
     <div className="space-y-4">
       {copyToast && (
@@ -458,6 +771,71 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
           </button>
         </div>
       )}
+
+      {/* Top Case Workspace Status Strip */}
+      <div className="glass-surface flex flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-2.5 text-xs">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 font-semibold text-slate-800">
+            <FolderOpen className="h-4 w-4 text-cyan-700" />
+            <span className="max-w-[260px] truncate">
+              {activeCase ? activeCase.title : "未归档新病历（分析后自动建档）"}
+            </span>
+          </span>
+          {activeCase && (
+            <span className="rounded-md bg-slate-100/90 px-2 py-0.5 font-mono text-[10px] text-slate-500">
+              {activeCase.case_id}
+            </span>
+          )}
+          {savingCase ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-cyan-50 px-2.5 py-0.5 text-[11px] font-medium text-cyan-800">
+              <RefreshCw className="h-3 w-3 animate-spin" />
+              存档同步中...
+            </span>
+          ) : savedTimeLabel ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-800">
+              <CheckCircle2 className="h-3 w-3" />
+              已自动存档 {savedTimeLabel}
+            </span>
+          ) : null}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {activeCase && (
+            <button
+              type="button"
+              onClick={() => setRevisionsModalOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/90 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-white"
+            >
+              <History className="h-3.5 w-3.5 text-cyan-700" />
+              历史版本 ({activeCase.revisions?.length ?? activeCase.revision_count ?? 1})
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleNewBlankCase}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-cyan-200 bg-cyan-50/85 px-3 py-1.5 text-xs font-semibold text-cyan-900 transition-colors hover:bg-cyan-100"
+          >
+            <FolderPlus className="h-3.5 w-3.5" />
+            新建空白病例
+          </button>
+          <input
+            ref={importCaseInputRef}
+            type="file"
+            accept=".json"
+            className="hidden"
+            onChange={handleImportCaseJson}
+          />
+          <button
+            type="button"
+            disabled={loadingAction === "import-case"}
+            onClick={() => importCaseInputRef.current?.click()}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/90 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-white"
+          >
+            <Upload className="h-3.5 w-3.5 text-cyan-700" />
+            导入 JSON
+          </button>
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:items-start">
         {/* Left 36% (~4-5 cols on 12-col grid; using 4.5 feel via lg:col-span-4 or custom flex) */}
@@ -493,9 +871,9 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
             </div>
           </div>
 
-          {/* Upload & Clear Toolbar */}
+          {/* Upload, Follow-up & Clear Toolbar */}
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -512,6 +890,19 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
                 <Upload className="h-3.5 w-3.5 text-cyan-700" />
                 导入病历 (.txt/.md/.docx)
               </button>
+              {activeCase && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFollowupDate(new Date().toISOString().slice(0, 10));
+                    setFollowupModalOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1 rounded-xl border border-cyan-200 bg-cyan-50/90 px-2.5 py-1.5 text-xs font-semibold text-cyan-800 transition-colors hover:bg-cyan-100"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  追加新诊次
+                </button>
+              )}
             </div>
             {rawText && (
               <button
@@ -532,7 +923,7 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
           {/* Clinical Editor (Matte High-Readability Layer) */}
           <div className="clinical-paper overflow-hidden rounded-2xl p-3">
             <textarea
-              rows={11}
+              rows={10}
               value={rawText}
               onChange={(e) => {
                 setRawText(e.target.value);
@@ -595,24 +986,44 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
             </div>
           )}
 
-          {/* Draft Mode Selector */}
+          {/* Draft Mode Selector with Cached/Stale Status Badges */}
           <div className="space-y-1.5">
             <label className="block text-xs font-semibold text-slate-700">目标临床文书模式</label>
             <div className="grid grid-cols-2 gap-2">
               {(["ward_round", "rehab_education"] as DraftMode[]).map((mode) => {
                 const active = draftMode === mode;
+                const hasCached = Boolean(analysis?.drafts_by_mode?.[mode]);
+                const isStale = Boolean(analysis?.draft_stale_by_mode?.[mode]);
                 return (
                   <button
                     key={mode}
                     type="button"
-                    onClick={() => setDraftMode(mode)}
-                    className={`rounded-xl border px-3 py-2 text-left text-xs font-medium transition-all ${
+                    disabled={loadingAction === "draft"}
+                    onClick={() => {
+                      if (analysis && analysis.raw_text === rawText) {
+                        void handleSwitchDraftMode(mode);
+                      } else {
+                        setDraftMode(mode);
+                      }
+                    }}
+                    className={`flex items-center justify-between gap-1.5 rounded-xl border px-3 py-2 text-left text-xs font-medium transition-all ${
                       active
                         ? "border-cyan-700 bg-cyan-50/90 text-cyan-900 shadow-sm"
                         : "border-white/80 bg-white/70 text-slate-600 hover:bg-white"
                     }`}
                   >
-                    {DRAFT_MODE_LABELS[mode]}
+                    <span className="truncate">{DRAFT_MODE_LABELS[mode]}</span>
+                    {hasCached && (
+                      <span
+                        className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                          isStale
+                            ? "bg-amber-100 text-amber-800"
+                            : "bg-emerald-100 text-emerald-800"
+                        }`}
+                      >
+                        {isStale ? "待刷新" : "已生成"}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -624,7 +1035,7 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
             <button
               type="button"
               disabled={Boolean(loadingAction)}
-              onClick={handleAnalyze}
+              onClick={() => void handleAnalyze()}
               className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-700 to-teal-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md shadow-cyan-900/15 transition-all hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-55"
             >
               <Sparkles className="h-4 w-4" />
@@ -641,56 +1052,191 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
             </button>
           </div>
 
-          {/* Local History */}
-          <div className="border-t border-white/70 pt-3">
-            <div className="mb-2 flex items-center justify-between text-xs">
-              <span className="inline-flex items-center gap-1.5 font-semibold text-slate-700">
-                <History className="h-3.5 w-3.5 text-cyan-700" />
-                近期脱敏分析记录
+          {/* Local Case Workspace Cabinet */}
+          <div className="space-y-2.5 border-t border-white/70 pt-3">
+            <div className="flex items-center justify-between text-xs">
+              <span
+                className="inline-flex items-center gap-1.5 font-semibold text-slate-700"
+                title={archivesDir ? `本地存储目录：${archivesDir}` : undefined}
+              >
+                <FolderOpen className="h-3.5 w-3.5 text-cyan-700" />
+                🗂️ 本地病例档案柜 ({caseList.length})
               </span>
-              {history.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setHighRiskOnly((v) => !v)}
+                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold transition-colors ${
+                  highRiskOnly
+                    ? "border-rose-300 bg-rose-100 text-rose-800"
+                    : "border-slate-200 bg-white/80 text-slate-600 hover:bg-white"
+                }`}
+              >
+                {highRiskOnly ? "仅高危红旗 ✓" : "仅看高危红旗"}
+              </button>
+            </div>
+
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400" />
+              <input
+                type="text"
+                value={caseSearch}
+                onChange={(e) => setCaseSearch(e.target.value)}
+                placeholder="搜索病例标题、红旗标签或病历关键词..."
+                className="w-full rounded-xl border border-slate-200/90 bg-white/85 py-1.5 pl-8 pr-7 text-xs text-slate-800 placeholder-slate-400 focus:border-cyan-600 focus:outline-none"
+              />
+              {caseSearch && (
                 <button
                   type="button"
-                  onClick={() => {
-                    setHistory([]);
-                    saveLocalHistory([]);
-                  }}
-                  className="text-[11px] text-slate-400 hover:text-slate-600"
+                  onClick={() => setCaseSearch("")}
+                  className="absolute right-2 top-1.5 text-slate-400 hover:text-slate-600"
                 >
-                  清除
+                  <X className="h-3.5 w-3.5" />
                 </button>
               )}
             </div>
-            {history.length === 0 ? (
-              <p className="text-[11px] text-slate-400">暂无记录，分析完成后自动保留最近 5 条。</p>
+
+            {loadingCases && caseList.length === 0 ? (
+              <p className="text-[11px] text-slate-400">正在加载本地档案柜...</p>
+            ) : caseList.length === 0 ? (
+              <p className="text-[11px] text-slate-400">
+                {caseSearch || highRiskOnly
+                  ? "未匹配到符合条件的本地病例档案。"
+                  : "暂无本地病例档案，分析完成后将自动持久化到本地档案柜。"}
+              </p>
             ) : (
-              <div className="space-y-1.5">
-                {history.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => {
-                      setAnalysis(item.state);
-                      setRawText(item.state.raw_text || "");
-                      setAlertsExpanded(false);
-                    }}
-                    className="flex w-full items-center justify-between rounded-xl border border-white/80 bg-white/65 px-3 py-2 text-left text-xs transition-colors hover:bg-white"
-                  >
-                    <div className="min-w-0 pr-2">
-                      <div className="truncate font-medium text-slate-800">{item.title}</div>
-                      <div className="text-[10px] text-slate-400">{item.timestamp}</div>
-                    </div>
-                    <span
-                      className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                        item.alertCount > 0
-                          ? "bg-rose-100 text-rose-800"
-                          : "bg-emerald-100 text-emerald-800"
+              <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+                {caseList.map((item) => {
+                  const isCurrent = activeCase?.case_id === item.case_id;
+                  const isEditingName = editingCaseId === item.case_id;
+                  const isConfirmDel = confirmDeleteCaseId === item.case_id;
+                  return (
+                    <div
+                      key={item.case_id}
+                      className={`rounded-xl border p-2.5 text-xs transition-all ${
+                        isCurrent
+                          ? "border-cyan-600 bg-cyan-50/85 shadow-sm"
+                          : "border-white/85 bg-white/70 hover:bg-white"
                       }`}
                     >
-                      {item.alertCount} 项警示
-                    </span>
-                  </button>
-                ))}
+                      {isEditingName ? (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="text"
+                            value={editingCaseTitle}
+                            onChange={(e) => setEditingCaseTitle(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void handleRenameCase(item.case_id);
+                              if (e.key === "Escape") setEditingCaseId(null);
+                            }}
+                            autoFocus
+                            className="min-w-0 flex-1 rounded-lg border border-cyan-400 bg-white px-2 py-1 text-xs text-slate-900 focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void handleRenameCase(item.case_id)}
+                            className="rounded-lg bg-cyan-700 px-2 py-1 text-[10px] font-semibold text-white"
+                          >
+                            保存
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingCaseId(null)}
+                            className="rounded-lg px-1.5 py-1 text-[10px] text-slate-500 hover:bg-slate-100"
+                          >
+                            取消
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-start justify-between gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void handleOpenCase(item.case_id)}
+                            className="min-w-0 flex-1 text-left"
+                          >
+                            <div className="truncate font-semibold text-slate-800">{item.title}</div>
+                            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-400">
+                              <span>{formatShortDateTime(item.updated_at)}</span>
+                              <span>· v{item.revision_count}</span>
+                              {item.scale_count > 0 && <span>· {item.scale_count} 量表</span>}
+                              {item.draft_modes_ready.length > 0 && (
+                                <span className="rounded bg-cyan-100/80 px-1 text-cyan-800">
+                                  {item.draft_modes_ready.length === 2
+                                    ? "双文书就绪"
+                                    : item.draft_modes_ready[0] === "ward_round"
+                                      ? "查房稿"
+                                      : "宣教稿"}
+                                </span>
+                              )}
+                            </div>
+                          </button>
+
+                          <div className="flex shrink-0 flex-col items-end gap-1">
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                item.critical_count > 0
+                                  ? "bg-rose-100 text-rose-800"
+                                  : item.alert_count > 0
+                                    ? "bg-amber-100 text-amber-800"
+                                    : "bg-emerald-100 text-emerald-800"
+                              }`}
+                            >
+                              {item.alert_count} 项警示
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                title="重命名"
+                                onClick={() => {
+                                  setEditingCaseId(item.case_id);
+                                  setEditingCaseTitle(item.title);
+                                  setConfirmDeleteCaseId(null);
+                                }}
+                                className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </button>
+                              <button
+                                type="button"
+                                title="导出 .json"
+                                onClick={() => void handleExportCase(item.case_id)}
+                                className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-cyan-700"
+                              >
+                                <Download className="h-3 w-3" />
+                              </button>
+                              {isConfirmDel ? (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDeleteCase(item.case_id)}
+                                    className="rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+                                  >
+                                    确认
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteCaseId(null)}
+                                    className="rounded px-1 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100"
+                                  >
+                                    取消
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  title="删除档案"
+                                  onClick={() => setConfirmDeleteCaseId(item.case_id)}
+                                  className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -900,15 +1446,13 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
                 {/* Tab 2: Scales & Manual Backfill */}
                 {activeTab === "scales" && (
                   <div className="space-y-4">
-                    {analysis.draft_stale && (
+                    {currentDraftStale && (
                       <div className="glass-warning flex flex-wrap items-center justify-between gap-2 rounded-2xl px-4 py-3 text-xs text-amber-900">
-                        <span>量表评估结果已更新，文书草稿尚未同步刷新。</span>
+                        <span>量表评估结果已更新，当前文书草稿尚未同步刷新。</span>
                         <button
                           type="button"
                           disabled={Boolean(loadingAction)}
-                          onClick={() =>
-                            handleRegenerateDraft((analysis.draft_mode as DraftMode) || draftMode)
-                          }
+                          onClick={() => void handleForceRegenerateDraft(activeDraftMode)}
                           className="inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-3 py-1.5 font-semibold text-white hover:bg-amber-700"
                         >
                           <RefreshCw className="h-3.5 w-3.5" />
@@ -998,29 +1542,42 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex flex-wrap items-center gap-2">
                         {(["ward_round", "rehab_education"] as DraftMode[]).map((mode) => {
-                          const active = (analysis.draft_mode || draftMode) === mode;
+                          const active = activeDraftMode === mode;
+                          const hasCached = Boolean(analysis.drafts_by_mode?.[mode]);
+                          const isStale = Boolean(analysis.draft_stale_by_mode?.[mode]);
                           return (
                             <button
                               key={mode}
                               type="button"
                               disabled={Boolean(loadingAction)}
-                              onClick={() => handleRegenerateDraft(mode)}
-                              className={`rounded-xl border px-3 py-1.5 text-xs font-semibold transition-all ${
+                              onClick={() => void handleSwitchDraftMode(mode)}
+                              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition-all ${
                                 active
-                                  ? "border-cyan-700 bg-cyan-700 text-white"
+                                  ? "border-cyan-700 bg-cyan-700 text-white shadow-sm"
                                   : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                               }`}
                             >
-                              {DRAFT_MODE_LABELS[mode]}
+                              <span>{DRAFT_MODE_LABELS[mode]}</span>
+                              {hasCached && (
+                                <span
+                                  className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                                    isStale
+                                      ? "bg-amber-100 text-amber-800"
+                                      : active
+                                        ? "bg-white/20 text-white"
+                                        : "bg-emerald-100 text-emerald-800"
+                                  }`}
+                                >
+                                  {isStale ? "待刷新" : "已生成"}
+                                </span>
+                              )}
                             </button>
                           );
                         })}
                         <button
                           type="button"
                           disabled={Boolean(loadingAction)}
-                          onClick={() =>
-                            handleRegenerateDraft((analysis.draft_mode as DraftMode) || draftMode)
-                          }
+                          onClick={() => void handleForceRegenerateDraft(activeDraftMode)}
                           className="inline-flex items-center gap-1.5 rounded-xl border border-cyan-200 bg-cyan-50/80 px-3 py-1.5 text-xs font-semibold text-cyan-800 hover:bg-cyan-100/80"
                         >
                           <RefreshCw
@@ -1028,23 +1585,47 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
                               loadingAction === "draft" ? "animate-spin" : ""
                             }`}
                           />
-                          重新生成
+                          🔄 重新生成当前文书
                         </button>
                       </div>
 
-                      {/* Verification Badge */}
-                      {analysis.draft?.blocked ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-800">
-                          <ShieldAlert className="h-3.5 w-3.5" />
-                          复检拦截：违背安全禁忌
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">
-                          <ShieldCheck className="h-3.5 w-3.5" />
-                          确定性输出复检通过
-                        </span>
-                      )}
+                      <div className="flex flex-wrap items-center gap-2">
+                        {analysis.draft_cache_hit && (
+                          <span className="rounded-full bg-cyan-50 px-2.5 py-0.5 text-[11px] font-medium text-cyan-800">
+                            ⚡ 缓存秒切
+                          </span>
+                        )}
+                        {/* Verification Badge */}
+                        {analysis.draft?.blocked ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-800">
+                            <ShieldAlert className="h-3.5 w-3.5" />
+                            复检拦截：违背安全禁忌
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">
+                            <ShieldCheck className="h-3.5 w-3.5" />
+                            确定性输出复检通过
+                          </span>
+                        )}
+                      </div>
                     </div>
+
+                    {currentDraftStale && (
+                      <div className="glass-warning flex flex-wrap items-center justify-between gap-2 rounded-2xl px-4 py-3 text-xs text-amber-900">
+                        <span>
+                          量表评估结果已更新，当前模式「{DRAFT_MODE_LABELS[activeDraftMode] || activeDraftMode}」文书草稿尚未同步刷新。
+                        </span>
+                        <button
+                          type="button"
+                          disabled={Boolean(loadingAction)}
+                          onClick={() => void handleForceRegenerateDraft(activeDraftMode)}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-3 py-1.5 font-semibold text-white hover:bg-amber-700"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          一键重新生成当前文书
+                        </button>
+                      </div>
+                    )}
 
                     {analysis.draft?.blocked ? (
                       <div className="glass-danger space-y-2 rounded-2xl p-4 text-xs text-rose-900">
@@ -1242,6 +1823,152 @@ export const CopilotPage: React.FC<CopilotPageProps> = ({
           )}
         </section>
       </div>
+
+      {/* Follow-up Visit Modal */}
+      {followupModalOpen && activeCase && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-4 backdrop-blur-sm">
+          <div className="glass-surface w-full max-w-lg space-y-4 rounded-3xl p-5 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">➕ 追加跨诊次复诊记录</h3>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  当前档案：{activeCase.title}（{activeCase.case_id}）
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFollowupModalOpen(false)}
+                className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="mb-1 block font-semibold text-slate-700">复诊日期</label>
+                <input
+                  type="text"
+                  value={followupDate}
+                  onChange={(e) => setFollowupDate(e.target.value)}
+                  placeholder="例如：2026-11-27"
+                  className="clinical-input text-xs"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block font-semibold text-slate-700">
+                  本次复诊情况 / 用药变更 / 专科查体（仅用脱敏描述）
+                </label>
+                <textarea
+                  rows={5}
+                  value={followupText}
+                  onChange={(e) => setFollowupText(e.target.value)}
+                  placeholder="例如：华法林已停药 10 天；复查行走步态较前好转，但仍偶有双手麻木..."
+                  className="clinical-input resize-y text-xs leading-relaxed"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setFollowupModalOpen(false)}
+                className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={!followupText.trim() || Boolean(loadingAction)}
+                onClick={() => void handleSubmitFollowup(false)}
+                className="rounded-xl border border-cyan-200 bg-cyan-50 px-3.5 py-2 text-xs font-semibold text-cyan-900 hover:bg-cyan-100 disabled:opacity-50"
+              >
+                {loadingAction === "followup" ? "保存中..." : "仅追加保存"}
+              </button>
+              <button
+                type="button"
+                disabled={!followupText.trim() || Boolean(loadingAction)}
+                onClick={() => void handleSubmitFollowup(true)}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-cyan-700 to-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:brightness-105 disabled:opacity-50"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                追加并立即重新分析
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Case Revisions History Modal */}
+      {revisionsModalOpen && activeCase && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-4 backdrop-blur-sm">
+          <div className="glass-surface flex max-h-[80vh] w-full max-w-xl flex-col space-y-4 rounded-3xl p-5 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  📜 档案历史版本 ({activeCase.revisions?.length || 0})
+                </h3>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  {activeCase.title}（{activeCase.case_id}）· 支持一键恢复任意历史快照
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRevisionsModalOpen(false)}
+                className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2 overflow-y-auto pr-1 text-xs">
+              {(activeCase.revisions || []).length === 0 ? (
+                <p className="py-6 text-center text-slate-400">暂无历史版本记录。</p>
+              ) : (
+                [...(activeCase.revisions || [])]
+                  .slice()
+                  .reverse()
+                  .map((revItem) => (
+                    <div
+                      key={revItem.rev}
+                      className="clinical-paper flex flex-wrap items-center justify-between gap-3 rounded-2xl p-3"
+                    >
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-md bg-cyan-100 px-2 py-0.5 font-mono text-[11px] font-bold text-cyan-900">
+                            v{revItem.rev}
+                          </span>
+                          <span className="font-semibold text-slate-800">
+                            {revItem.note || "临床分析快照"}
+                          </span>
+                          <span className="text-[11px] text-slate-400">
+                            {formatShortDateTime(revItem.timestamp)}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                          <span>警示数：{revItem.alert_count ?? 0}</span>
+                          {revItem.draft_modes_ready && revItem.draft_modes_ready.length > 0 && (
+                            <span>
+                              · 文书：{revItem.draft_modes_ready.map((m) => DRAFT_MODE_LABELS[m as DraftMode] || m).join(" / ")}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={Boolean(loadingAction)}
+                        onClick={() => void handleRestoreRevision(revItem.rev)}
+                        className="shrink-0 rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-xs font-semibold text-cyan-900 hover:bg-cyan-100 disabled:opacity-50"
+                      >
+                        {loadingAction === `restore-${revItem.rev}` ? "恢复中..." : "恢复此版本"}
+                      </button>
+                    </div>
+                  ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -2,6 +2,8 @@ import type {
   BenchmarkProgressEvent,
   BenchmarkReportDetail,
   BenchmarkReportsResponse,
+  CaseListResponse,
+  CaseWorkspaceRecord,
   CopilotAnalysisResponse,
   DemoCasesResponse,
   DraftMode,
@@ -11,6 +13,7 @@ import type {
   OllamaModelsResponse,
   PiiDetectResponse,
   PiiSanitizeResponse,
+  SaveCaseWorkspaceRequest,
   SettingsLlmResponse,
   StartBenchmarkRunRequest,
   TestConnectionResponse,
@@ -221,6 +224,7 @@ export const api = {
     draft_mode: DraftMode;
     model?: string;
     mock_mode?: boolean;
+    force?: boolean;
   }): Promise<CopilotAnalysisResponse> {
     return apiRequest<CopilotAnalysisResponse>("/api/v1/copilot/draft/regenerate", {
       method: "POST",
@@ -232,6 +236,80 @@ export const api = {
     return apiRequest<HandoverResponse>("/api/v1/copilot/handover", {
       method: "POST",
       body: JSON.stringify({ analysis_state }),
+    });
+  },
+
+  // ---------------- Case Workspace ----------------
+  listCaseWorkspaces(params?: { q?: string; high_risk_only?: boolean }): Promise<CaseListResponse> {
+    const query = new URLSearchParams();
+    if (params?.q?.trim()) {
+      query.set("q", params.q.trim());
+    }
+    if (params?.high_risk_only) {
+      query.set("high_risk_only", "true");
+    }
+    const qs = query.toString();
+    return apiRequest<CaseListResponse>(`/api/v1/cases${qs ? `?${qs}` : ""}`);
+  },
+
+  getCaseWorkspace(caseId: string): Promise<CaseWorkspaceRecord> {
+    return apiRequest<CaseWorkspaceRecord>(`/api/v1/cases/${encodeURIComponent(caseId)}`);
+  },
+
+  saveCaseWorkspace(payload: SaveCaseWorkspaceRequest): Promise<CaseWorkspaceRecord> {
+    return apiRequest<CaseWorkspaceRecord>("/api/v1/cases", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateCaseWorkspaceMeta(
+    caseId: string,
+    payload: { title?: string; tags?: string[] }
+  ): Promise<CaseWorkspaceRecord> {
+    return apiRequest<CaseWorkspaceRecord>(`/api/v1/cases/${encodeURIComponent(caseId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  appendCaseFollowup(
+    caseId: string,
+    payload: { visit_date?: string; followup_text: string }
+  ): Promise<CaseWorkspaceRecord> {
+    return apiRequest<CaseWorkspaceRecord>(
+      `/api/v1/cases/${encodeURIComponent(caseId)}/followup`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  restoreCaseRevision(caseId: string, rev: number): Promise<CaseWorkspaceRecord> {
+    return apiRequest<CaseWorkspaceRecord>(
+      `/api/v1/cases/${encodeURIComponent(caseId)}/restore/${rev}`,
+      { method: "POST" }
+    );
+  },
+
+  deleteCaseWorkspace(caseId: string): Promise<{ deleted?: boolean; case_id?: string }> {
+    return apiRequest<{ deleted?: boolean; case_id?: string }>(
+      `/api/v1/cases/${encodeURIComponent(caseId)}`,
+      { method: "DELETE" }
+    );
+  },
+
+  exportCaseWorkspace(caseId: string): Promise<CaseWorkspaceRecord> {
+    return apiRequest<CaseWorkspaceRecord>(
+      `/api/v1/cases/${encodeURIComponent(caseId)}/export`
+    );
+  },
+
+  importCaseWorkspace(payload: unknown): Promise<CaseWorkspaceRecord> {
+    return apiRequest<CaseWorkspaceRecord>("/api/v1/cases/import", {
+      method: "POST",
+      body: JSON.stringify(payload),
     });
   },
 

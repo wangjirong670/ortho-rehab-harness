@@ -17,7 +17,7 @@ from backend.deps import (
     resolve_frontend_dist_dir,
     verify_bearer_token,
 )
-from backend.routers import benchmark, copilot, kb, settings
+from backend.routers import benchmark, cases, copilot, kb, settings
 from core_tools.llm_client import LLMConfig
 
 APP_VERSION = "0.3.0"
@@ -65,6 +65,7 @@ def create_app() -> FastAPI:
 
     auth_deps = [Depends(verify_bearer_token)]
     application.include_router(copilot.router, prefix="/api/v1", dependencies=auth_deps)
+    application.include_router(cases.router, prefix="/api/v1", dependencies=auth_deps)
     application.include_router(benchmark.router, prefix="/api/v1", dependencies=auth_deps)
     application.include_router(kb.router, prefix="/api/v1", dependencies=auth_deps)
     application.include_router(settings.router, prefix="/api/v1", dependencies=auth_deps)

@@ -1,7 +1,7 @@
 """Build Windows --onedir PyInstaller distribution and release ZIP for OrthoRehab-TCM-Harness.
 
 Usage:
-    python packaging/build_release.py --version v0.3.0
+    python packaging/build_release.py --version v0.4.0
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 APP_NAME = "OrthoRehab-TCM-Harness"
-DEFAULT_VERSION = "v0.3.0"
+DEFAULT_VERSION = "v0.4.0"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 APP_ICON_REL = Path("packaging") / "assets" / "app_icon.ico"
 
@@ -146,7 +146,7 @@ def is_forbidden_bundle_path(rel_posix: str, *, allow_third_party_pem: bool = Fa
     if any(part in always_forbidden_dirs for part in parts):
         return True
 
-    root_forbidden_dirs = {"dist", "build", "release_artifacts", "logs", "custom_cases"}
+    root_forbidden_dirs = {"dist", "build", "release_artifacts", "logs", "custom_cases", "case_archives"}
     if parts[0] in root_forbidden_dirs:
         return True
 

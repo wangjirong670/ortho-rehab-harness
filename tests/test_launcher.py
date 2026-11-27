@@ -311,6 +311,8 @@ def test_packaging_whitelist_icon_and_security_audit(tmp_path: Path) -> None:
     assert build_release.is_forbidden_bundle_path("app_benchmark/results/bench_20261126.json") is True
     assert build_release.is_forbidden_bundle_path("logs/copilot.log") is True
     assert build_release.is_forbidden_bundle_path("custom_cases/my_case.yaml") is True
+    assert build_release.is_forbidden_bundle_path("case_archives/case_001.json") is True
+    assert build_release.DEFAULT_VERSION == "v0.4.0"
     assert build_release.is_forbidden_bundle_path("core_tools/__pycache__/schemas.cpython-311.pyc") is True
     assert build_release.is_forbidden_bundle_path(".git/config") is True
     assert build_release.is_forbidden_bundle_path(".venv/pyvenv.cfg") is True
@@ -374,12 +376,15 @@ def test_packaging_whitelist_icon_and_security_audit(tmp_path: Path) -> None:
     (fake_dist / "_internal" / "frontend" / "node_modules" / "x.js").write_text("1", encoding="utf-8")
     (fake_dist / "_internal" / "app_copilot").mkdir(parents=True)
     (fake_dist / "_internal" / "app_copilot" / "streamlit_copilot.py").write_text("import streamlit", encoding="utf-8")
+    (fake_dist / "case_archives").mkdir(parents=True)
+    (fake_dist / "case_archives" / "patient_001.json").write_text("{}", encoding="utf-8")
     violations = build_release.audit_dist_directory(fake_dist)
     assert ".env" in violations
     assert "_internal/app_benchmark/test_cases/private/leak.yaml" in violations
     assert "_internal/app_benchmark/results/old.json" in violations
     assert "_internal/frontend/node_modules" in violations
     assert "_internal/app_copilot/streamlit_copilot.py" in violations
+    assert "case_archives/patient_001.json" in violations
 
 
 def test_desktop_app_check_and_error_logging(
