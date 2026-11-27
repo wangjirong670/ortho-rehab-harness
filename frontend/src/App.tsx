@@ -1,19 +1,30 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { api } from "./api/client";
+import { api, STORAGE_KEYS } from "./api/client";
 import type {
   HealthResponse,
   KbOverviewResponse,
-  PageKey,
   SettingsLlmResponse,
 } from "./api/types";
 import { GlassShell } from "./components/GlassShell";
+import { WorkspaceMode } from "./components/ModeCapsule";
+import { CopilotWorkspace } from "./components/copilot/CopilotWorkspace";
 import { BenchmarkPage } from "./pages/BenchmarkPage";
-import { CopilotPage } from "./pages/CopilotPage";
-import { KnowledgeBasePage } from "./pages/KnowledgeBasePage";
 import { SettingsPage } from "./pages/SettingsPage";
 
+function loadDefaultExpandSteps(): boolean {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.PREFERENCES);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as { defaultExpandSteps?: boolean };
+    return Boolean(parsed?.defaultExpandSteps);
+  } catch {
+    return false;
+  }
+}
+
 export const App: React.FC = () => {
-  const [activePage, setActivePage] = useState<PageKey>("copilot");
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("copilot");
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
@@ -22,6 +33,12 @@ export const App: React.FC = () => {
   const [settings, setSettings] = useState<SettingsLlmResponse | null>(null);
   const [kb, setKb] = useState<KbOverviewResponse | null>(null);
   const [kbLoading, setKbLoading] = useState(false);
+
+  const [sidebarSlot, setSidebarSlot] = useState<React.ReactNode>(null);
+  const [headerActions, setHeaderActions] = useState<React.ReactNode>(null);
+  const [defaultExpandSteps, setDefaultExpandSteps] = useState<boolean>(
+    loadDefaultExpandSteps
+  );
 
   const loadBootstrap = useCallback(async () => {
     setHealthLoading(true);
@@ -39,7 +56,7 @@ export const App: React.FC = () => {
       const llm = await api.getLlmSettings();
       setSettings(llm);
     } catch {
-      // May fail if auth token is required and not yet entered; user can configure in Settings
+      // May fail before auth token is configured
     }
 
     setKbLoading(true);
@@ -54,7 +71,7 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    loadBootstrap();
+    void loadBootstrap();
   }, [loadBootstrap]);
 
   const activeModel = settings?.copilot_default_model || health?.default_model || "";
@@ -66,11 +83,29 @@ export const App: React.FC = () => {
         .split(/[,，\n]+/)
         .map((s) => s.trim())
         .filter(Boolean);
+  const availableModels = Array.from(
+    new Set([
+      ...(settings?.preset_models || []),
+      ...(settings?.ollama_models || []),
+      activeModel,
+    ].filter(Boolean))
+  );
 
   return (
     <GlassShell
-      activePage={activePage}
-      onSelectPage={setActivePage}
+      workspaceMode={workspaceMode}
+      settingsOpen={settingsOpen}
+      onSelectWorkspaceMode={(mode) => {
+        setSettingsOpen(false);
+        setWorkspaceMode(mode);
+        if (mode !== "copilot") {
+          setSidebarSlot(null);
+          setHeaderActions(null);
+        }
+      }}
+      onOpenSettings={() => setSettingsOpen(true)}
+      sidebarSlot={workspaceMode === "copilot" ? sidebarSlot : null}
+      headerActions={workspaceMode === "copilot" ? headerActions : null}
       health={health}
       healthLoading={healthLoading}
       healthError={healthError}
@@ -79,31 +114,34 @@ export const App: React.FC = () => {
       complianceNotice={settings?.compliance_notice || ""}
       onRefreshHealth={loadBootstrap}
     >
-      {activePage === "copilot" && (
-        <CopilotPage
-          activeModel={activeModel}
+      {settingsOpen ? (
+        <SettingsPage
+          settings={settings}
+          kb={kb}
+          kbLoading={kbLoading}
+          health={health}
+          defaultExpandSteps={defaultExpandSteps}
+          onChangeDefaultExpandSteps={setDefaultExpandSteps}
+          onSettingsUpdated={(next) => setSettings(next)}
+          onRefreshHealth={loadBootstrap}
+          onBack={() => setSettingsOpen(false)}
+        />
+      ) : workspaceMode === "copilot" ? (
+        <CopilotWorkspace
+          availableModels={availableModels}
+          defaultModel={activeModel}
           mockMode={mockMode}
           scalesCatalog={scalesList}
-          actionLabels={kb?.labels?.clinical_actions}
+          defaultExpandSteps={defaultExpandSteps}
+          onRenderSidebarSlot={setSidebarSlot}
+          onRenderHeaderActions={setHeaderActions}
         />
-      )}
-
-      {activePage === "benchmark" && (
+      ) : (
         <BenchmarkPage
           presetModels={settings?.preset_models || []}
           ollamaModels={settings?.ollama_models || []}
           defaultBenchmarkModels={defaultBenchmarkList}
           defaultMockMode={mockMode}
-        />
-      )}
-
-      {activePage === "kb" && <KnowledgeBasePage kb={kb} loading={kbLoading} />}
-
-      {activePage === "settings" && (
-        <SettingsPage
-          settings={settings}
-          onSettingsUpdated={(next) => setSettings(next)}
-          onRefreshHealth={loadBootstrap}
         />
       )}
     </GlassShell>

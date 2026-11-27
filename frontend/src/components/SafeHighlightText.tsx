@@ -56,11 +56,17 @@ export const SafeHighlightText: React.FC<SafeHighlightTextProps> = ({
     if (span.start > cursor) {
       nodes.push(<span key={`t-${idx}`}>{text.slice(cursor, span.start)}</span>);
     }
+    const isDangerReason =
+      span.reason.includes("违禁") ||
+      span.reason.includes("违规") ||
+      span.reason.includes("禁忌") ||
+      span.reason.includes("误导");
     const isProtection =
-      tone === "safe" ||
-      span.reason.includes("否定") ||
-      span.reason.includes("保护") ||
-      span.reason.includes("放行");
+      !isDangerReason &&
+      (tone === "safe" ||
+        span.reason.includes("否定豁免") ||
+        span.reason.includes("已否定") ||
+        span.reason.includes("合理保护"));
 
     nodes.push(
       <mark

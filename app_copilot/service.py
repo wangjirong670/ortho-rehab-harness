@@ -890,23 +890,3 @@ def parse_discrete_score_options(spec: Any, item: Any) -> Optional[Dict[float, s
         return mapping
 
     return None
-
-
-def get_demo_cases_payload() -> List[Dict[str, str]]:
-    """Return formatted demo cases list for the REST API.
-
-    @deprecated: remove in P1.
-    """
-    cases: List[Dict[str, str]] = []
-    for case_id, item in DEMO_CASES.items():
-        tag = item.get("button_label") or item.get("description") or case_id
-        cases.append(
-            {
-                "id": case_id,
-                "title": str(item.get("title") or case_id),
-                "tag": str(tag),
-                "raw_text": str(item.get("text") or ""),
-                "default_draft_mode": str(item.get("default_mode") or "ward_round"),
-            }
-        )
-    return cases

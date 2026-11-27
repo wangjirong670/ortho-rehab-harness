@@ -506,3 +506,30 @@ def recalculate_session_scale(
         "auto_saved_red_flags": newly_added,
         "session": updated_state,
     }
+
+
+@router.post("/{session_id}/diffs/{diff_id}/dismiss")
+def dismiss_session_card_diff(
+    patient_id: str,
+    session_id: str,
+    diff_id: str,
+) -> Dict[str, Any]:
+    try:
+        load_patient(patient_id)
+        replay_session(patient_id, session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    append_event(
+        patient_id,
+        session_id,
+        "human_action",
+        {
+            "action": "dismiss_card_diff",
+            "diff_id": diff_id,
+        },
+        render_md=True,
+    )
+    return {"session": replay_session(patient_id, session_id)}

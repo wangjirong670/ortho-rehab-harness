@@ -5,10 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from streamlit.testing.v1 import AppTest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-APP_PATH = str(PROJECT_ROOT / "app_copilot" / "streamlit_copilot.py")
 
 from app_copilot.prompts import (
     DEMO_CASES,
@@ -17,7 +15,7 @@ from app_copilot.prompts import (
     build_draft_messages,
     build_extraction_messages,
 )
-from app_copilot.streamlit_copilot import (
+from app_copilot.service import (
     collect_unified_alerts,
     evaluate_scale_entries,
     format_active_medication_stop_display,
@@ -221,84 +219,6 @@ def test_incomplete_scale_errors_without_zero_fill_then_recalculates_with_linkag
     assert "RF_001" in updated_state["draft"]["content"]
 
 
-def test_streamlit_apptest_smoke_all_demo_cases(monkeypatch) -> None:
-    monkeypatch.setenv("LLM_MOCK_MODE", "true")
-    at = AppTest.from_file(APP_PATH, default_timeout=20)
-    at.run()
-    assert not at.exception
-
-    # Sidebar compliance warning & demo buttons present
-    assert len(at.sidebar.warning) >= 1
-    demo_keys = [b.key for b in at.sidebar.button]
-    for case_id in DEMO_CASES:
-        assert f"demo_btn_{case_id}" in demo_keys
-
-    # 1. Click Demo Case 1 and run analysis
-    at.sidebar.button(key="demo_btn_cervical_myelopathy_joa").click().run()
-    assert not at.exception
-    assert "踩棉花感" in at.text_area(key="raw_note_input").value
-
-    at.button(key="run_analysis_btn").click().run()
-    assert not at.exception
-    error_texts = "\n".join(el.value for el in at.error)
-    assert "RF_001" in error_texts
-    assert "JOA_CERVICAL_17" in error_texts
-
-    # 2. Click Demo Case 2 and run analysis
-    at.sidebar.button(key="demo_btn_warfarin_notoginseng_washout").click().run()
-    assert not at.exception
-    at.button(key="run_analysis_btn").click().run()
-    assert not at.exception
-    error_texts_2 = "\n".join(el.value for el in at.error)
-    assert "DC_001" in error_texts_2
-    assert "DC_003" not in error_texts_2
-    warning_texts_2 = "\n".join(el.value for el in at.warning)
-    assert "WOMAC_LIKERT_V3_1" in warning_texts_2
-
-    # 3. Click Demo Case 3 and run analysis (no top errors, green success banner)
-    at.sidebar.button(key="demo_btn_sedentary_low_back_pain").click().run()
-    assert not at.exception
-    at.button(key="run_analysis_btn").click().run()
-    assert not at.exception
-    assert len(at.error) == 0
-    assert any("安全扫描通过" in el.value for el in at.success)
-
-
-def test_streamlit_apptest_manual_tab2_recalculation_triggers_top_red_flag(monkeypatch) -> None:
-    monkeypatch.setenv("LLM_MOCK_MODE", "true")
-    at = AppTest.from_file(APP_PATH, default_timeout=20)
-    at.run()
-    assert not at.exception
-
-    partial_note = (
-        "某男，56岁，颈肩僵硬3周，无发热，无二便失禁。"
-        "颈椎 JOA 17 分制仅记录：上肢运动功能 2 分，下肢运动功能 2 分。"
-    )
-    at.text_area(key="raw_note_input").set_value(partial_note)
-    at.button(key="run_analysis_btn").click().run()
-    assert not at.exception
-    assert len(at.error) == 0
-    assert any("JOA_CERVICAL_17" in el.value for el in at.warning)
-
-    # Complete missing JOA fields in Tab 2 (2+2+1+1+1+2 = 9 <= 12.5)
-    at.number_input(key="fix_scale_1_0_JOA_CERVICAL_17_upper_limb_sensory").set_value(1.0)
-    at.number_input(key="fix_scale_1_0_JOA_CERVICAL_17_lower_limb_sensory").set_value(1.0)
-    at.number_input(key="fix_scale_1_0_JOA_CERVICAL_17_trunk_sensory").set_value(1.0)
-    at.number_input(key="fix_scale_1_0_JOA_CERVICAL_17_bladder_function").set_value(2.0)
-    at.button(key="recalc_err_1_0_JOA_CERVICAL_17").click().run()
-    assert not at.exception
-
-    # Top safety banner must now display JOA linkage red flag without losing context
-    error_texts = "\n".join(el.value for el in at.error)
-    assert "RF_001" in error_texts
-    assert "JOA_CERVICAL_17" in error_texts
-
-    # Refresh Tab 3 draft directly from Tab 2 sync button
-    at.button(key="sync_draft_from_tab2_1").click().run()
-    assert not at.exception
-    assert any("RF_001" in el.value for el in at.markdown)
-
-
 def test_prompt_injection_isolation_nonce_and_fence_escaping() -> None:
     """P0-5: Extraction prompt isolates untrusted notes via json.dumps + random nonce; draft prompt escapes fences."""
     injected_note = (
@@ -454,87 +374,6 @@ def test_sanitize_error_message_and_evaluate_scale_entries_robustness() -> None:
     assert results[0]["total_score"] == 4
 
 
-def test_streamlit_renders_review_tags_and_blocked_draft_error(monkeypatch) -> None:
-    """P1-6 & P0-5 UI: Streamlit displays needs_review/conflict_with_text and blocks unsafe draft rendering."""
-    monkeypatch.setenv("LLM_MOCK_MODE", "true")
-    at = AppTest.from_file(APP_PATH, default_timeout=20)
-    at.run()
-    assert not at.exception
-
-    # Inject a pre-built copilot_state containing needs_review/conflict_with_text + a blocked draft
-    at.session_state["copilot_state"] = {
-        "raw_text": "测试病历",
-        "extracted_note": CopilotExtractedNote(chief_complaint="踩棉花感").model_dump(),
-        "risk_report": {
-            "alerts": [
-                {
-                    "rule_id": "RF_001",
-                    "name": "脊髓受压",
-                    "severity": "critical",
-                    "source": "text_scan",
-                    "matched_evidence": ["踩棉花感"],
-                    "clinical_action": "STOP_AND_REFER",
-                    "clinical_alert": "严禁扳法",
-                    "needs_review": True,
-                    "conflict_with_text": True,
-                }
-            ],
-            "suppressed_matches": [],
-            "summary": {"total_alerts": 1},
-        },
-        "scale_results": [],
-        "unified_alerts": [
-            {
-                "rule_id": "RF_001",
-                "name": "脊髓受压",
-                "severity": "critical",
-                "source": "text_scan",
-                "source_label": "双轨规则扫描",
-                "matched_evidence": ["踩棉花感"],
-                "clinical_action": "STOP_AND_REFER",
-                "clinical_alert": "严禁扳法",
-                "needs_review": True,
-                "conflict_with_text": True,
-            }
-        ],
-        "draft": {
-            "mode": "ward_round",
-            "mode_label": "上级医师查房汇报提纲",
-            "content": "⚠️ 安全拦截：已阻止渲染",
-            "blocked": True,
-            "safety_check": {
-                "passed": False,
-                "blocked": True,
-                "violations": [
-                    {
-                        "rule_id": "RF_001",
-                        "matched_action": "旋转扳法",
-                        "snippet": "可行颈椎旋转扳法松解",
-                        "reason": "违背 RF_001",
-                    }
-                ],
-                "message": "安全拦截",
-            },
-            "model": "fake/test",
-            "mock": False,
-        },
-        "draft_mode": "ward_round",
-        "draft_stale": False,
-        "trace": {},
-    }
-    at.run()
-    assert not at.exception
-
-    error_texts = "\n".join(el.value for el in at.error)
-    warning_texts = "\n".join(el.value for el in at.warning)
-    assert "needs_review" in error_texts
-    assert "conflict_with_text" in error_texts
-    assert "人工复核提示" in warning_texts
-    assert "安全拦截" in error_texts
-    assert "旋转扳法" in error_texts
-    assert not any("可行颈椎旋转扳法松解" in el.value for el in at.markdown)
-
-
 def test_joa_mild_caution_13_to_16_merges_into_unified_alerts_and_blocks_manipulation() -> None:
     """P2-2: JOA 13-16 mild dysfunction triggers medium caution linkage in unified_alerts and blocks rotational manipulation."""
     joa_mild = calculate_scale(
@@ -658,31 +497,18 @@ def test_copilot_n3_stopped_medication_display_and_unknown_duration_ui(monkeypat
     )
     assert format_active_medication_stop_display({"name": "利伐沙班", "status": "active", "stopped_days_ago": None}) == "在用 / 未停药"
 
-    # End-to-end copilot pipeline + Streamlit AppTest rendering for unknown cessation duration
     unknown_dur_note = "长期口服氯吡格雷75mg qd。近期自行停药，今日要求行小针刀。"
     state = run_copilot_analysis(unknown_dur_note, draft_mode="ward_round", mock_mode=True)
     active_meds = state["extracted_note"]["current_state_snapshot"]["active_medications"]
     clopidogrel = next(m for m in active_meds if m["name"] == "氯吡格雷")
     assert clopidogrel["status"] == "stopped"
     assert clopidogrel["stopped_days_ago"] is None
+    assert format_active_medication_stop_display(clopidogrel) == "已停药，时长未明（按洗脱期内处理）"
     assert any(a["rule_id"] == "DC_011" for a in state["risk_report"]["alerts"])
 
-    at = AppTest.from_file(APP_PATH, default_timeout=20)
-    at.run()
-    assert not at.exception
-    at.text_area(key="raw_note_input").set_value(unknown_dur_note)
-    at.button(key="run_analysis_btn").click().run()
-    assert not at.exception
-
-    error_texts = "\n".join(el.value for el in at.error)
-    assert "DC_011" in error_texts
-    df_values = "\n".join(df.value.to_string() for df in at.dataframe)
-    assert "已停药，时长未明（按洗脱期内处理）" in df_values
-
-    # Also verify "三天前自己停了" renders "3 天（洗脱期内）" in Tab 1 active_medications table
     colloquial_note = "【1年前 心内科】长期口服氯吡格雷。\n【3天前 个人记录】三天前自己停了。今日要求行小针刀。"
-    at.text_area(key="raw_note_input").set_value(colloquial_note)
-    at.button(key="run_analysis_btn").click().run()
-    assert not at.exception
-    df_values_colloq = "\n".join(df.value.to_string() for df in at.dataframe)
-    assert "3 天（洗脱期内）" in df_values_colloq
+    state_colloq = run_copilot_analysis(colloquial_note, draft_mode="ward_round", mock_mode=True)
+    clop_colloq = next(
+        m for m in state_colloq["extracted_note"]["current_state_snapshot"]["active_medications"] if m["name"] == "氯吡格雷"
+    )
+    assert format_active_medication_stop_display(clop_colloq) == "3 天（洗脱期内）"

@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from streamlit.testing.v1 import AppTest
-
 from app_copilot.prompts import (
     CopilotExtractedNote,
     CurrentStateSnapshot,
@@ -13,15 +9,12 @@ from app_copilot.prompts import (
     TimelineEvent,
     build_extraction_messages,
 )
-from app_copilot.streamlit_copilot import run_copilot_analysis
+from app_copilot.service import run_copilot_analysis
 from core_tools.llm_client import extract_structured_json
 from core_tools.rule_scanner import (
     merge_snapshot_into_structured_facts,
     scan_clinical_risks,
 )
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-APP_PATH = str(PROJECT_ROOT / "app_copilot" / "streamlit_copilot.py")
 
 
 def test_prompts_timeline_and_snapshot_backward_compatibility() -> None:
@@ -151,32 +144,6 @@ def test_mock_extract_longitudinal_cases_and_resolution(monkeypatch) -> None:
         s["rule_id"] == "RF_007" and s["reason"] == "superseded_by_latest_timeline_state"
         for s in state_020["risk_report"]["suppressed_matches"]
     )
-
-
-def test_streamlit_tab1_renders_timeline_and_current_state_snapshot(monkeypatch) -> None:
-    monkeypatch.setenv("LLM_MOCK_MODE", "true")
-    at = AppTest.from_file(APP_PATH, default_timeout=20)
-    at.run()
-    assert not at.exception
-
-    longitudinal_note = (
-        "【术后第10天 骨科病房】右膝ACL重建术后早期保护期，严禁跑跳。\n"
-        "【术后第16周 运动医学科复查】主刀医生评估肌力与活动度达标，准予进入基础直线慢跑阶段。"
-    )
-    at.text_area(key="raw_note_input").set_value(longitudinal_note)
-    at.button(key="run_analysis_btn").click().run()
-    assert not at.exception
-
-    # RF_007 is superseded -> top banner passes cleanly with 0 errors
-    assert len(at.error) == 0
-    assert any("安全扫描通过" in el.value for el in at.success)
-
-    # Tab 1 shows timeline cards and current_state_snapshot override banner
-    md_text = "\n".join(el.value for el in at.markdown)
-    info_text = "\n".join(el.value for el in at.info)
-    assert "current_state_snapshot" in md_text
-    assert "术后第16周" in md_text
-    assert "diagnosis_override_note" in info_text
 
 
 def test_prohibited_stop_drug_phrasing_does_not_suppress_active_conflict(monkeypatch) -> None:

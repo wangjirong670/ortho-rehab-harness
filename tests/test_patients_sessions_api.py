@@ -108,19 +108,34 @@ def test_patient_sessions_sse_e2e_inheritance_education_scales_and_trace(
     )
     assert bad_put.status_code == 400
 
-    # Commit medication change
+    # Commit medication change WITH session_id & diff_id -> resolves pending diff in trace
+    s1_state_before = api_client.get(f"/api/v1/patients/PT_E2E_01/sessions/{s1_id}").json()
+    pending_before = s1_state_before.get("pending_card_diffs") or []
+    diff_id = pending_before[0]["diff_id"] if pending_before else None
+
     commit_resp = api_client.post(
         "/api/v1/patients/PT_E2E_01/commit",
         json={
+            "session_id": s1_id,
+            "diff_id": diff_id,
             "changes": {
                 "add_medications": [
                     {"name": "阿司匹林", "status": "active", "source": "clinician"}
                 ]
-            }
+            },
         },
     )
     assert commit_resp.status_code == 200
     assert commit_resp.json()["revision"] >= 3
+    if diff_id:
+        s1_state_after = api_client.get(f"/api/v1/patients/PT_E2E_01/sessions/{s1_id}").json()
+        assert all(d.get("diff_id") != diff_id for d in s1_state_after.get("pending_card_diffs") or [])
+
+    # Dismiss endpoint smoke check
+    dismiss_resp = api_client.post(
+        f"/api/v1/patients/PT_E2E_01/sessions/{s1_id}/diffs/diff_nonexistent/dismiss"
+    )
+    assert dismiss_resp.status_code == 200
 
     # 3. Create Session 2 (follow-up without re-mentioning RF_001 -> must inherit RF_001)
     s2_resp = api_client.post(

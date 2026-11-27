@@ -50,7 +50,7 @@ def test_health_and_optional_bearer_auth(
     assert isinstance(health["frontend_ready"], bool)
 
     # Protected endpoints must reject missing or invalid token
-    unauth = c.get("/api/v1/copilot/demo-cases")
+    unauth = c.get("/api/v1/patients")
     assert unauth.status_code == 401
 
     bad_auth = c.get(
@@ -60,23 +60,15 @@ def test_health_and_optional_bearer_auth(
     assert bad_auth.status_code == 401
 
     ok_auth = c.get(
-        "/api/v1/copilot/demo-cases",
+        "/api/v1/patients",
         headers={"Authorization": "Bearer secret-token-xyz"},
     )
     assert ok_auth.status_code == 200
-    assert len(ok_auth.json()["cases"]) >= 3
+    assert isinstance(ok_auth.json()["patients"], list)
 
 
 def test_copilot_upload_pii_fast_scan_analyze_scales_and_handover(client: TestClient) -> None:
-    # 1. Demo cases
-    demo_resp = client.get("/api/v1/copilot/demo-cases")
-    assert demo_resp.status_code == 200
-    cases = demo_resp.json()["cases"]
-    assert len(cases) >= 3
-    first_case = cases[0]
-    assert {"id", "title", "tag", "raw_text", "default_draft_mode"}.issubset(first_case.keys())
-
-    # 2. Upload .txt and .docx
+    # 1. Upload .txt and .docx
     up_txt = client.post(
         "/api/v1/copilot/upload",
         files={"file": ("note.txt", "某男，58岁，颈肩僵硬。".encode("utf-8"), "text/plain")},

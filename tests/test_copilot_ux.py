@@ -8,9 +8,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from streamlit.testing.v1 import AppTest
-
-from app_copilot.streamlit_copilot import (
+from app_copilot.service import (
     build_clinical_handover_text,
     detect_potential_pii,
     extract_text_from_uploaded_file,
@@ -26,7 +24,6 @@ from core_tools.calculator import load_scales_catalog
 from core_tools.llm_client import format_llm_error_zh, probe_ollama_models
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-APP_PATH = str(PROJECT_ROOT / "app_copilot" / "streamlit_copilot.py")
 
 
 def test_format_llm_error_zh_covers_all_common_failures_and_redacts_keys() -> None:
@@ -201,35 +198,3 @@ def test_fast_safety_scan_capsules_and_scale_helpers() -> None:
     assert removed["scale_results"] == []
     assert removed["extracted_note"]["scale_params"] == []
     assert removed["draft_stale"] is True
-
-
-def test_streamlit_apptest_fast_scan_pii_sanitize_history_and_kb(monkeypatch) -> None:
-    monkeypatch.setenv("LLM_MOCK_MODE", "true")
-    monkeypatch.setattr("app_copilot.streamlit_copilot.probe_ollama_models", lambda timeout=0.4: [])
-    at = AppTest.from_file(APP_PATH, default_timeout=20)
-    at.run()
-    assert not at.exception
-
-    # 1. Enter note with PII + red flag -> shows PII warning, click sanitize & undo
-    pii_note = "姓名：李四，手机号 13900001111。近2周走路踩棉花感，扣纽扣不灵。"
-    at.text_area(key="raw_note_input").set_value(pii_note).run()
-    assert any("隐私保护提醒" in w.value for w in at.warning)
-
-    at.button(key="sanitize_pii_btn").click().run()
-    assert not at.exception
-    sanitized_val = at.text_area(key="raw_note_input").value
-    assert "李四" not in sanitized_val
-    assert "13900001111" not in sanitized_val
-    assert "[姓名已脱敏]" in sanitized_val
-
-    # 2. Fast safety scan (zero LLM) catches RF_001 and renders compact capsules
-    at.button(key="fast_scan_btn").click().run()
-    assert not at.exception
-    error_texts = "\n".join(el.value for el in at.error)
-    assert "RF_001" in error_texts
-    assert any("红线禁忌速览" in md.value for md in at.markdown)
-
-    # 3. History entry is preserved in sidebar even after clicking a demo case
-    at.sidebar.button(key="demo_btn_sedentary_low_back_pain").click().run()
-    assert not at.exception
-    assert any(b.key == "history_restore_btn_0" for b in at.sidebar.button)

@@ -417,7 +417,7 @@ def test_desktop_app_check_and_error_logging(
     code, payload = desktop_app.run_startup_check()
     assert code == 0
     assert payload["status"] == "ok"
-    assert payload["version"] == "0.3.0"
+    assert payload["version"] == "0.4.0"
     assert payload["frontend_ready"] is True
     assert payload["knowledge_base"] == {"red_flags": 16, "drug_conflicts": 11, "scales": 4}
 

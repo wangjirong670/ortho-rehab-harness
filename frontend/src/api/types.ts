@@ -1,5 +1,8 @@
-export type PageKey = "copilot" | "benchmark" | "kb" | "settings";
+export type PageKey = "copilot" | "benchmark" | "settings";
 
+export type OutputMode = "full" | "screen";
+export type ThinkingLevel = "off" | "low" | "medium" | "high";
+export type EntrySource = "clinician" | "extracted" | "system";
 export type DraftMode = "ward_round" | "rehab_education";
 
 export interface HealthResponse {
@@ -10,18 +13,6 @@ export interface HealthResponse {
   mock_mode: boolean;
   default_model: string;
   frontend_ready: boolean;
-}
-
-export interface DemoCaseItem {
-  id: string;
-  title: string;
-  tag: string;
-  raw_text: string;
-  default_draft_mode: DraftMode;
-}
-
-export interface DemoCasesResponse {
-  cases: DemoCaseItem[];
 }
 
 export interface UploadResponse {
@@ -236,54 +227,217 @@ export interface HandoverResponse {
   draft_plain_text: string;
 }
 
-// ---------------- Case Workspace Types ----------------
+// ---------------- Patient Workspace & Session Trace Types (v0.4) ----------------
 
-export interface CaseRevisionSummary {
-  rev: number;
-  timestamp: string;
-  note?: string;
-  raw_text?: string;
-  alert_count?: number;
-  draft_modes_ready?: string[];
-  analysis_state?: CopilotAnalysisResponse;
+export interface PatientRedFlagItem {
+  id: string;
+  name?: string | null;
+  since: string;
+  status: "active" | "resolved";
+  source: EntrySource;
+  resolved_reason?: string | null;
+  resolved_at?: string | null;
 }
 
-export interface CaseWorkspaceSummary {
-  case_id: string;
-  title: string;
-  tags: string[];
+export interface PatientMedicationItem {
+  name: string;
+  status: "active" | "stopped" | "unknown";
+  start_date?: string | null;
+  stop_date?: string | null;
+  stopped_days_ago?: number | null;
+  source: EntrySource;
+}
+
+export interface PatientScaleRecord {
+  scale_id: string;
+  date: string;
+  total_score?: number | null;
+  severity_band?: string | null;
+  status: string;
+  source: EntrySource;
+  params?: Record<string, unknown>;
+}
+
+export interface PatientCard {
+  patient_id: string;
+  display_name: string;
+  active_red_flags: PatientRedFlagItem[];
+  medications: PatientMedicationItem[];
+  allergies: string[];
+  surgical_history: string[];
+  scale_history: PatientScaleRecord[];
+  created_at?: string | null;
+  updated_at?: string | null;
+  revision: number;
+}
+
+export interface PatientSummary {
+  patient_id: string;
+  display_name: string;
+  active_red_flag_count: number;
+  active_red_flag_ids: string[];
+  session_count: number;
+  revision: number;
   created_at: string;
   updated_at: string;
-  revision_count: number;
+}
+
+export interface PatientDetailResponse {
+  patient_id: string;
+  display_name: string;
+  revision: number;
+  card: PatientCard;
+  body: string;
+  raw_markdown: string;
+}
+
+export interface PatientHistoryItem {
+  revision: number;
+  updated_at: string;
+  active_red_flag_count: number;
+  active_red_flag_ids: string[];
+  medication_count: number;
+}
+
+export interface SessionSummary {
+  session_id: string;
+  patient_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  turn_count: number;
   alert_count: number;
-  critical_count: number;
-  scale_count: number;
-  draft_modes_ready: string[];
-  snippet: string;
+  has_critical: boolean;
+  pending_diff_count: number;
 }
 
-export interface CaseWorkspaceRecord extends CaseWorkspaceSummary {
-  schema_version: number;
-  raw_text: string;
-  draft_mode: DraftMode | string;
-  analysis_state: CopilotAnalysisResponse;
-  revisions: CaseRevisionSummary[];
+export interface VerificationResult {
+  passed: boolean;
+  blocked: boolean;
+  violations?: DraftSafetyViolation[];
+  message?: string;
 }
 
-export interface CaseListResponse {
-  archives_dir: string;
-  cases: CaseWorkspaceSummary[];
+export interface SessionMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+  raw_content?: string;
+  reasoning?: string;
+  turn_id?: string | null;
+  ts?: string;
+  model?: string | null;
+  mock?: boolean;
+  output_mode?: OutputMode;
+  thinking?: ThinkingLevel;
+  blocked?: boolean;
+  verification?: VerificationResult;
+  alerts?: UnifiedAlert[];
+  scale_results?: ScaleResult[];
+  stale?: boolean;
 }
 
-export interface SaveCaseWorkspaceRequest {
-  case_id?: string;
-  title?: string;
-  tags?: string[];
-  raw_text: string;
-  draft_mode: DraftMode | string;
-  analysis_state: CopilotAnalysisResponse;
-  revision_note?: string;
-  record_revision?: boolean;
+export interface CardDiffPayload {
+  diff_id?: string;
+  turn_id?: string | null;
+  ts?: string;
+  auto_red_flags?: Array<{
+    id: string;
+    name: string;
+    severity: string;
+    source: string;
+  }>;
+  add_medications?: PatientMedicationItem[];
+  add_surgical_history?: string[];
+  add_scale_history?: PatientScaleRecord[];
+}
+
+export interface SessionEducationItem {
+  ts: string;
+  turn_id?: string | null;
+  content: string;
+  blocked: boolean;
+  model?: string | null;
+  verification?: VerificationResult;
+}
+
+export interface SessionState {
+  session_id: string;
+  patient_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  messages: SessionMessage[];
+  history_for_llm: Array<{ role: string; content: string }>;
+  latest_extracted_note: ExtractedNote;
+  latest_risk_report: RiskReport;
+  latest_alerts: UnifiedAlert[];
+  latest_scale_results: ScaleResult[];
+  pending_card_diffs: CardDiffPayload[];
+  educations: SessionEducationItem[];
+  event_count: number;
+}
+
+export interface TraceEvent {
+  seq: number;
+  ts: string;
+  turn_id?: string | null;
+  type: string;
+  payload: Record<string, unknown>;
+}
+
+export interface ChatStepEvent {
+  turn_id?: string;
+  step: string;
+  status: "running" | "done" | string;
+  label: string;
+}
+
+export interface ChatAlertEvent {
+  turn_id?: string;
+  unified_alerts: UnifiedAlert[];
+  risk_report?: RiskReport;
+  scale_results?: ScaleResult[];
+  inherited_red_flags?: string[];
+  auto_saved_red_flags?: string[];
+}
+
+export interface ChatContentEvent {
+  turn_id?: string;
+  content: string;
+  model?: string;
+  mock?: boolean;
+  output_mode?: OutputMode;
+  blocked?: boolean;
+  latency_ms?: number;
+}
+
+export interface ChatDoneEvent {
+  turn_id?: string;
+  patient_id: string;
+  session_id: string;
+  blocked?: boolean;
+  alert_count?: number;
+}
+
+export interface SessionEducationResponse {
+  patient_id: string;
+  session_id: string;
+  turn_id: string;
+  mode: string;
+  mode_label: string;
+  content: string;
+  raw_content?: string;
+  blocked: boolean;
+  safety_check: VerificationResult;
+  inherited_red_flags?: string[];
+  model?: string;
+  mock?: boolean;
+}
+
+export interface SessionScaleResponse {
+  scale_result: ScaleResult;
+  auto_saved_red_flags: string[];
+  session: SessionState;
 }
 
 // ---------------- Benchmark Types ----------------

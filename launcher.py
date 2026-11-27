@@ -640,11 +640,14 @@ def run_env_check(paths: Optional[RuntimePaths] = None) -> Tuple[int, Dict[str, 
         "core_tools.calculator",
         "core_tools.rule_scanner",
         "core_tools.llm_client",
+        "core_tools.harness_core",
         "app_copilot.prompts",
-        "app_copilot.streamlit_copilot",
+        "app_copilot.service",
+        "app_copilot.patient_store",
+        "app_copilot.session_store",
         "app_benchmark.evaluator",
         "app_benchmark.runner",
-        "app_benchmark.streamlit_bench",
+        "backend.main",
     )
 
     imported: Dict[str, str] = {}
@@ -681,12 +684,12 @@ def run_env_check(paths: Optional[RuntimePaths] = None) -> Tuple[int, Dict[str, 
         except Exception as exc:
             errors.append(f"knowledge_base_load: {type(exc).__name__}: {exc}")
 
-    copilot_exists = (runtime.bundle_dir / "app_copilot" / "streamlit_copilot.py").is_file()
-    bench_exists = (runtime.bundle_dir / "app_benchmark" / "streamlit_bench.py").is_file()
+    copilot_exists = (runtime.bundle_dir / "app_copilot" / "service.py").is_file()
+    bench_exists = (runtime.bundle_dir / "app_benchmark" / "runner.py").is_file()
     if not copilot_exists:
-        errors.append("missing app_copilot/streamlit_copilot.py")
+        errors.append("missing app_copilot/service.py")
     if not bench_exists:
-        errors.append("missing app_benchmark/streamlit_bench.py")
+        errors.append("missing app_benchmark/runner.py")
 
     payload: Dict[str, Any] = {
         "status": "ok" if not errors else "error",

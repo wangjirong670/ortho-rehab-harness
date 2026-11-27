@@ -17,6 +17,7 @@ from app_copilot.patient_store import (
     restore_revision,
     save_patient,
 )
+from app_copilot.session_store import append_event
 from core_tools.schemas import PatientCard
 
 router = APIRouter(prefix="/patients", tags=["patients"])
@@ -36,6 +37,8 @@ class UpdatePatientRequest(BaseModel):
 
 class CommitPatientRequest(BaseModel):
     changes: Dict[str, Any] = Field(default_factory=dict)
+    session_id: Optional[str] = None
+    diff_id: Optional[str] = None
 
 
 def _format_patient_response(card: PatientCard, body: str, raw_markdown: str) -> Dict[str, Any]:
@@ -103,6 +106,36 @@ def commit_patient_changes(patient_id: str, req: CommitPatientRequest) -> Dict[s
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"档案变更提交失败：{exc}") from exc
+
+    if req.session_id:
+        for res_item in req.changes.get("resolve_red_flags") or []:
+            if isinstance(res_item, dict) and res_item.get("id"):
+                append_event(
+                    patient_id,
+                    req.session_id,
+                    "human_action",
+                    {
+                        "action": "resolve_red_flag",
+                        "rule_id": str(res_item.get("id") or "").strip().upper(),
+                        "resolved_reason": str(res_item.get("resolved_reason") or "").strip(),
+                    },
+                    render_md=True,
+                )
+        non_resolve_keys = {k for k in req.changes.keys() if k != "resolve_red_flags"}
+        if non_resolve_keys or req.diff_id:
+            append_event(
+                patient_id,
+                req.session_id,
+                "human_action",
+                {
+                    "action": "commit_card_diff",
+                    "diff_id": req.diff_id,
+                    "changes": req.changes,
+                    "revision": card.revision,
+                },
+                render_md=True,
+            )
+
     return _format_patient_response(card, body, raw_md)
 
 

@@ -2,29 +2,40 @@ import type {
   BenchmarkProgressEvent,
   BenchmarkReportDetail,
   BenchmarkReportsResponse,
-  CaseListResponse,
-  CaseWorkspaceRecord,
-  CopilotAnalysisResponse,
-  DemoCasesResponse,
-  DraftMode,
+  CardDiffPayload,
+  ChatAlertEvent,
+  ChatContentEvent,
+  ChatDoneEvent,
+  ChatStepEvent,
   HandoverResponse,
   HealthResponse,
   KbOverviewResponse,
   OllamaModelsResponse,
+  OutputMode,
+  PatientCard,
+  PatientDetailResponse,
+  PatientHistoryItem,
+  PatientSummary,
   PiiDetectResponse,
   PiiSanitizeResponse,
-  SaveCaseWorkspaceRequest,
+  SessionEducationResponse,
+  SessionScaleResponse,
+  SessionState,
+  SessionSummary,
   SettingsLlmResponse,
   StartBenchmarkRunRequest,
   TestConnectionResponse,
+  ThinkingLevel,
+  TraceEvent,
   UpdateSettingsLlmRequest,
   UploadResponse,
+  VerificationResult,
 } from "./types";
 
 export const STORAGE_KEYS = {
   AUTH_TOKEN: "ortho_auth_token",
   API_BASE_URL: "ortho_api_base_url",
-  COPILOT_HISTORY: "ortho_copilot_history",
+  PREFERENCES: "ortho_ui_preferences",
 } as const;
 
 export class ApiError extends Error {
@@ -121,7 +132,7 @@ async function parseErrorMessage(res: Response): Promise<{ message: string; deta
   }
   if (res.status === 401 || res.status === 403) {
     return {
-      message: "鉴权失败（401/403），请在「模型与设置」中核对访问令牌 (Bearer Token)。",
+      message: "鉴权失败（401/403），请在「设置」中核对访问令牌 (Bearer Token)。",
       detail,
     };
   }
@@ -140,16 +151,34 @@ async function apiRequest<T>(path: string, init: RequestInit = {}, isFormData = 
   return (await res.json()) as T;
 }
 
+function triggerDownloadBlob(blob: Blob, filename: string): void {
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
+export interface ChatStreamHandlers {
+  onStep?: (ev: ChatStepEvent) => void;
+  onAlert?: (ev: ChatAlertEvent) => void;
+  onReasoning?: (ev: { turn_id?: string; reasoning: string }) => void;
+  onContent?: (ev: ChatContentEvent) => void;
+  onVerification?: (ev: VerificationResult & { turn_id?: string }) => void;
+  onCardDiff?: (ev: CardDiffPayload) => void;
+  onDone?: (ev: ChatDoneEvent) => void;
+  onError?: (message: string) => void;
+}
+
 export const api = {
   health(): Promise<HealthResponse> {
     return apiRequest<HealthResponse>("/api/v1/health");
   },
 
-  // ---------------- Copilot ----------------
-  getDemoCases(): Promise<DemoCasesResponse> {
-    return apiRequest<DemoCasesResponse>("/api/v1/copilot/demo-cases");
-  },
-
+  // ---------------- Copilot Helpers (Upload / PII / Handover) ----------------
   uploadClinicalFile(file: File): Promise<UploadResponse> {
     const form = new FormData();
     form.append("file", file);
@@ -174,111 +203,54 @@ export const api = {
     });
   },
 
-  fastScan(rawText: string): Promise<CopilotAnalysisResponse> {
-    return apiRequest<CopilotAnalysisResponse>("/api/v1/copilot/fast-scan", {
-      method: "POST",
-      body: JSON.stringify({ raw_text: rawText }),
-    });
-  },
-
-  analyzeCopilot(payload: {
-    raw_text: string;
-    draft_mode: DraftMode;
-    model?: string;
-    mock_mode?: boolean;
-  }): Promise<CopilotAnalysisResponse> {
-    return apiRequest<CopilotAnalysisResponse>("/api/v1/copilot/analyze", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-  },
-
-  recalculateScale(payload: {
-    analysis_state: CopilotAnalysisResponse;
-    scale_id: string;
-    updated_params: Record<string, number | null>;
-    scale_index?: number;
-    refresh_draft: boolean;
-    draft_mode?: DraftMode;
-    model?: string;
-    mock_mode?: boolean;
-  }): Promise<CopilotAnalysisResponse> {
-    return apiRequest<CopilotAnalysisResponse>("/api/v1/copilot/scales/recalculate", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-  },
-
-  removeScale(payload: {
-    analysis_state: CopilotAnalysisResponse;
-    scale_index: number;
-  }): Promise<CopilotAnalysisResponse> {
-    return apiRequest<CopilotAnalysisResponse>("/api/v1/copilot/scales/remove", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-  },
-
-  regenerateDraft(payload: {
-    analysis_state: CopilotAnalysisResponse;
-    draft_mode: DraftMode;
-    model?: string;
-    mock_mode?: boolean;
-    force?: boolean;
-  }): Promise<CopilotAnalysisResponse> {
-    return apiRequest<CopilotAnalysisResponse>("/api/v1/copilot/draft/regenerate", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-  },
-
-  buildHandover(analysis_state: CopilotAnalysisResponse): Promise<HandoverResponse> {
+  exportHandover(analysis_state: Record<string, unknown>): Promise<HandoverResponse> {
     return apiRequest<HandoverResponse>("/api/v1/copilot/handover", {
       method: "POST",
       body: JSON.stringify({ analysis_state }),
     });
   },
 
-  // ---------------- Case Workspace ----------------
-  listCaseWorkspaces(params?: { q?: string; high_risk_only?: boolean }): Promise<CaseListResponse> {
-    const query = new URLSearchParams();
-    if (params?.q?.trim()) {
-      query.set("q", params.q.trim());
-    }
-    if (params?.high_risk_only) {
-      query.set("high_risk_only", "true");
-    }
-    const qs = query.toString();
-    return apiRequest<CaseListResponse>(`/api/v1/cases${qs ? `?${qs}` : ""}`);
+  // ---------------- Patients Workspace (v0.4 PATIENT.md) ----------------
+  listPatients(): Promise<{ patients: PatientSummary[] }> {
+    return apiRequest<{ patients: PatientSummary[] }>("/api/v1/patients");
   },
 
-  getCaseWorkspace(caseId: string): Promise<CaseWorkspaceRecord> {
-    return apiRequest<CaseWorkspaceRecord>(`/api/v1/cases/${encodeURIComponent(caseId)}`);
-  },
-
-  saveCaseWorkspace(payload: SaveCaseWorkspaceRequest): Promise<CaseWorkspaceRecord> {
-    return apiRequest<CaseWorkspaceRecord>("/api/v1/cases", {
+  createPatient(payload: {
+    display_name: string;
+    patient_id?: string;
+    body?: string;
+    card?: Partial<PatientCard>;
+  }): Promise<PatientDetailResponse> {
+    return apiRequest<PatientDetailResponse>("/api/v1/patients", {
       method: "POST",
       body: JSON.stringify(payload),
     });
   },
 
-  updateCaseWorkspaceMeta(
-    caseId: string,
-    payload: { title?: string; tags?: string[] }
-  ): Promise<CaseWorkspaceRecord> {
-    return apiRequest<CaseWorkspaceRecord>(`/api/v1/cases/${encodeURIComponent(caseId)}`, {
-      method: "PATCH",
+  getPatient(patientId: string): Promise<PatientDetailResponse> {
+    return apiRequest<PatientDetailResponse>(`/api/v1/patients/${encodeURIComponent(patientId)}`);
+  },
+
+  updatePatient(
+    patientId: string,
+    payload: { card: PatientCard; body: string }
+  ): Promise<PatientDetailResponse> {
+    return apiRequest<PatientDetailResponse>(`/api/v1/patients/${encodeURIComponent(patientId)}`, {
+      method: "PUT",
       body: JSON.stringify(payload),
     });
   },
 
-  appendCaseFollowup(
-    caseId: string,
-    payload: { visit_date?: string; followup_text: string }
-  ): Promise<CaseWorkspaceRecord> {
-    return apiRequest<CaseWorkspaceRecord>(
-      `/api/v1/cases/${encodeURIComponent(caseId)}/followup`,
+  commitPatientChanges(
+    patientId: string,
+    payload: {
+      changes: Record<string, unknown>;
+      session_id?: string;
+      diff_id?: string;
+    }
+  ): Promise<PatientDetailResponse> {
+    return apiRequest<PatientDetailResponse>(
+      `/api/v1/patients/${encodeURIComponent(patientId)}/commit`,
       {
         method: "POST",
         body: JSON.stringify(payload),
@@ -286,31 +258,222 @@ export const api = {
     );
   },
 
-  restoreCaseRevision(caseId: string, rev: number): Promise<CaseWorkspaceRecord> {
-    return apiRequest<CaseWorkspaceRecord>(
-      `/api/v1/cases/${encodeURIComponent(caseId)}/restore/${rev}`,
+  listPatientHistory(
+    patientId: string
+  ): Promise<{ patient_id: string; revisions: PatientHistoryItem[] }> {
+    return apiRequest<{ patient_id: string; revisions: PatientHistoryItem[] }>(
+      `/api/v1/patients/${encodeURIComponent(patientId)}/history`
+    );
+  },
+
+  restorePatientRevision(patientId: string, rev: number): Promise<PatientDetailResponse> {
+    return apiRequest<PatientDetailResponse>(
+      `/api/v1/patients/${encodeURIComponent(patientId)}/restore/${rev}`,
       { method: "POST" }
     );
   },
 
-  deleteCaseWorkspace(caseId: string): Promise<{ deleted?: boolean; case_id?: string }> {
-    return apiRequest<{ deleted?: boolean; case_id?: string }>(
-      `/api/v1/cases/${encodeURIComponent(caseId)}`,
+  deletePatient(patientId: string): Promise<{ deleted: boolean; patient_id: string }> {
+    return apiRequest<{ deleted: boolean; patient_id: string }>(
+      `/api/v1/patients/${encodeURIComponent(patientId)}`,
       { method: "DELETE" }
     );
   },
 
-  exportCaseWorkspace(caseId: string): Promise<CaseWorkspaceRecord> {
-    return apiRequest<CaseWorkspaceRecord>(
-      `/api/v1/cases/${encodeURIComponent(caseId)}/export`
+  // ---------------- Clinical Sessions & Event Trace (v0.4) ----------------
+  listSessions(
+    patientId: string
+  ): Promise<{ patient_id: string; sessions: SessionSummary[] }> {
+    return apiRequest<{ patient_id: string; sessions: SessionSummary[] }>(
+      `/api/v1/patients/${encodeURIComponent(patientId)}/sessions`
     );
   },
 
-  importCaseWorkspace(payload: unknown): Promise<CaseWorkspaceRecord> {
-    return apiRequest<CaseWorkspaceRecord>("/api/v1/cases/import", {
-      method: "POST",
-      body: JSON.stringify(payload),
+  createSession(patientId: string, title = ""): Promise<SessionState> {
+    return apiRequest<SessionState>(
+      `/api/v1/patients/${encodeURIComponent(patientId)}/sessions`,
+      {
+        method: "POST",
+        body: JSON.stringify({ title }),
+      }
+    );
+  },
+
+  getSession(patientId: string, sessionId: string): Promise<SessionState> {
+    return apiRequest<SessionState>(
+      `/api/v1/patients/${encodeURIComponent(patientId)}/sessions/${encodeURIComponent(sessionId)}`
+    );
+  },
+
+  getSessionTrace(
+    patientId: string,
+    sessionId: string,
+    turnId?: string
+  ): Promise<{
+    patient_id: string;
+    session_id: string;
+    turn_id?: string | null;
+    events: TraceEvent[];
+  }> {
+    const qs = turnId ? `?turn_id=${encodeURIComponent(turnId)}` : "";
+    return apiRequest(
+      `/api/v1/patients/${encodeURIComponent(patientId)}/sessions/${encodeURIComponent(sessionId)}/trace${qs}`
+    );
+  },
+
+  async downloadSessionTrace(patientId: string, sessionId: string): Promise<void> {
+    const url = buildUrl(
+      `/api/v1/patients/${encodeURIComponent(patientId)}/sessions/${encodeURIComponent(sessionId)}/trace?download=true`
+    );
+    const res = await fetch(url, {
+      method: "GET",
+      headers: buildHeaders(undefined, true),
     });
+    if (!res.ok) {
+      const { message, detail } = await parseErrorMessage(res);
+      throw new ApiError(message, res.status, detail);
+    }
+    const blob = await res.blob();
+    triggerDownloadBlob(blob, `${sessionId}.trace.jsonl`);
+  },
+
+  async streamSessionChat(
+    patientId: string,
+    sessionId: string,
+    payload: {
+      content: string;
+      model?: string;
+      thinking?: ThinkingLevel;
+      output_mode?: OutputMode;
+      mock_mode?: boolean;
+      pii_action?: "none" | "sanitized" | "override_raw";
+    },
+    handlers: ChatStreamHandlers,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const url = buildUrl(
+      `/api/v1/patients/${encodeURIComponent(patientId)}/sessions/${encodeURIComponent(sessionId)}/chat`
+    );
+    const res = await fetch(url, {
+      method: "POST",
+      headers: buildHeaders({ Accept: "text/event-stream" }),
+      body: JSON.stringify(payload),
+      signal,
+    });
+    if (!res.ok) {
+      const { message, detail } = await parseErrorMessage(res);
+      throw new ApiError(message, res.status, detail);
+    }
+    if (!res.body) {
+      throw new ApiError("浏览器不支持流式响应读取。", 0);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let sawTerminal = false;
+
+    const dispatchBlock = (rawBlock: string) => {
+      const lines = rawBlock.split(/\r?\n/);
+      let eventName = "message";
+      const dataLines: string[] = [];
+
+      for (const line of lines) {
+        if (!line || line.startsWith(":")) continue;
+        if (line.startsWith("event:")) {
+          eventName = line.slice(6).trim();
+        } else if (line.startsWith("data:")) {
+          dataLines.push(line.slice(5).trimStart());
+        }
+      }
+      if (dataLines.length === 0) return;
+
+      const rawData = dataLines.join("\n");
+      let parsed: Record<string, unknown> = {};
+      try {
+        parsed = JSON.parse(rawData) as Record<string, unknown>;
+      } catch {
+        parsed = { message: rawData };
+      }
+
+      if (eventName === "step") {
+        handlers.onStep?.(parsed as unknown as ChatStepEvent);
+      } else if (eventName === "alert") {
+        handlers.onAlert?.(parsed as unknown as ChatAlertEvent);
+      } else if (eventName === "reasoning") {
+        handlers.onReasoning?.(parsed as unknown as { turn_id?: string; reasoning: string });
+      } else if (eventName === "content") {
+        handlers.onContent?.(parsed as unknown as ChatContentEvent);
+      } else if (eventName === "verification") {
+        handlers.onVerification?.(parsed as unknown as VerificationResult & { turn_id?: string });
+      } else if (eventName === "card_diff") {
+        handlers.onCardDiff?.(parsed as unknown as CardDiffPayload);
+      } else if (eventName === "done") {
+        sawTerminal = true;
+        handlers.onDone?.(parsed as unknown as ChatDoneEvent);
+      } else if (eventName === "error") {
+        sawTerminal = true;
+        handlers.onError?.(String(parsed.message || "对话流执行出错"));
+      }
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split(/\r?\n\r?\n/);
+      buffer = blocks.pop() || "";
+      for (const blk of blocks) {
+        if (blk.trim()) dispatchBlock(blk);
+      }
+    }
+
+    if (buffer.trim()) {
+      dispatchBlock(buffer);
+    }
+
+    if (!sawTerminal && !signal?.aborted) {
+      handlers.onDone?.({ patient_id: patientId, session_id: sessionId });
+    }
+  },
+
+  generateSessionEducation(
+    patientId: string,
+    sessionId: string,
+    payload: { model?: string; mock_mode?: boolean; turn_id?: string } = {}
+  ): Promise<SessionEducationResponse> {
+    return apiRequest<SessionEducationResponse>(
+      `/api/v1/patients/${encodeURIComponent(patientId)}/sessions/${encodeURIComponent(sessionId)}/education`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  recalculateSessionScale(
+    patientId: string,
+    sessionId: string,
+    payload: { scale_id: string; updated_params: Record<string, number | null> }
+  ): Promise<SessionScaleResponse> {
+    return apiRequest<SessionScaleResponse>(
+      `/api/v1/patients/${encodeURIComponent(patientId)}/sessions/${encodeURIComponent(sessionId)}/scales`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  dismissSessionDiff(
+    patientId: string,
+    sessionId: string,
+    diffId: string
+  ): Promise<{ session: SessionState }> {
+    return apiRequest<{ session: SessionState }>(
+      `/api/v1/patients/${encodeURIComponent(patientId)}/sessions/${encodeURIComponent(sessionId)}/diffs/${encodeURIComponent(diffId)}/dismiss`,
+      { method: "POST" }
+    );
   },
 
   // ---------------- Benchmark ----------------
@@ -352,16 +515,7 @@ export const api = {
     const blob = await res.blob();
     const ext = format === "markdown" ? "md" : format;
     const stem = filename.replace(/\.json$/i, "");
-    const dlName = `${stem}.${ext}`;
-
-    const objectUrl = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = objectUrl;
-    a.download = dlName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(objectUrl);
+    triggerDownloadBlob(blob, `${stem}.${ext}`);
   },
 
   startBenchmarkRun(payload: StartBenchmarkRunRequest): Promise<{ job_id: string }> {

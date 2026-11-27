@@ -127,8 +127,9 @@ def run_startup_check() -> Tuple[int, Dict[str, Any]]:
             )
             required_routes = {
                 "/api/v1/health",
-                "/api/v1/copilot/demo-cases",
-                "/api/v1/copilot/analyze",
+                "/api/v1/patients",
+                "/api/v1/patients/{patient_id}/sessions",
+                "/api/v1/patients/{patient_id}/sessions/{session_id}/chat",
                 "/api/v1/benchmark/reports",
                 "/api/v1/kb/overview",
                 "/api/v1/settings/llm",
@@ -144,7 +145,7 @@ def run_startup_check() -> Tuple[int, Dict[str, Any]]:
 
     payload = {
         "status": "ok" if not errors else "error",
-        "version": "0.3.0",
+        "version": "0.4.0",
         **env_info,
         "frontend_ready": frontend_ready,
         "knowledge_base": kb_summary,

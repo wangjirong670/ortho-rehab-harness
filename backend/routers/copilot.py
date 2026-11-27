@@ -12,7 +12,6 @@ from app_copilot.service import (
     detect_potential_pii_details,
     extract_text_from_uploaded_file,
     format_copilot_response,
-    get_demo_cases_payload,
     markdown_to_plain_text,
     recalculate_scale_in_state,
     regenerate_draft_in_state,
@@ -68,11 +67,6 @@ class DraftRegenerateRequest(BaseModel):
 
 class HandoverRequest(BaseModel):
     analysis_state: Dict[str, Any]
-
-
-@router.get("/demo-cases")
-def get_demo_cases() -> Dict[str, Any]:
-    return {"cases": get_demo_cases_payload()}
 
 
 @router.post("/upload")
