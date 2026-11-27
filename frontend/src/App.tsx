@@ -128,6 +128,7 @@ export const App: React.FC = () => {
           defaultModel={activeModel}
           modelCapabilities={settings?.model_capabilities || {}}
           mockMode={mockMode}
+          offlineMode={Boolean(settings?.offline_mode)}
           scalesCatalog={scalesList}
           defaultExpandSteps={defaultExpandSteps}
           onRenderSidebarSlot={setSidebarSlot}

@@ -8,12 +8,20 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import launcher
 from app_copilot.service import PRESET_MODELS
 from core_tools.llm_client import LLMConfig, _resolve_env_file, probe_ollama_models
 from core_tools.model_capabilities import get_model_capabilities, list_model_capabilities
+from core_tools.schemas import WebSourceCategory
+from core_tools.web_search import (
+    add_custom_source,
+    delete_custom_source,
+    is_offline_mode,
+    list_all_web_sources,
+    toggle_custom_source,
+)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -22,7 +30,19 @@ class UpdateLLMSettingsRequest(BaseModel):
     copilot_default_model: Optional[str] = None
     benchmark_models: Optional[str] = None
     llm_mock_mode: Optional[bool] = None
+    offline_mode: Optional[bool] = None
     env_updates: Optional[Dict[str, Optional[str]]] = None
+
+
+class AddCustomWebSourceRequest(BaseModel):
+    name: str = Field(..., min_length=2, max_length=120)
+    category: WebSourceCategory = "guideline"
+    base_url: str = Field(..., min_length=8)
+    description: str = ""
+
+
+class ToggleCustomWebSourceRequest(BaseModel):
+    enabled: bool
 
 
 class TestConnectionRequest(BaseModel):
@@ -84,6 +104,7 @@ def _build_llm_settings_payload() -> Dict[str, Any]:
             "deepseek/deepseek-chat,dashscope/qwen-plus,openai/gpt-4o-mini",
         ),
         "llm_mock_mode": bool(cfg.mock_mode),
+        "offline_mode": is_offline_mode(),
         "preset_models": preset_models,
         "model_capabilities": list_model_capabilities(all_known_models),
         "providers": providers,
@@ -106,6 +127,8 @@ def update_llm_settings(req: UpdateLLMSettingsRequest) -> Dict[str, Any]:
         updates["BENCHMARK_MODELS"] = req.benchmark_models.strip()
     if req.llm_mock_mode is not None:
         updates["LLM_MOCK_MODE"] = "true" if req.llm_mock_mode else "false"
+    if req.offline_mode is not None:
+        updates["ORTHO_OFFLINE_MODE"] = "true" if req.offline_mode else "false"
 
     if req.env_updates:
         for raw_key, raw_val in req.env_updates.items():
@@ -194,3 +217,49 @@ def list_ollama_models() -> Dict[str, Any]:
 @router.get("/model-capabilities")
 def get_single_model_capability(model: str = Query(..., min_length=1)) -> Dict[str, Any]:
     return get_model_capabilities(model)
+
+
+@router.get("/web-sources")
+def get_web_sources() -> Dict[str, Any]:
+    return list_all_web_sources()
+
+
+@router.post("/web-sources/custom")
+def create_custom_web_source(req: AddCustomWebSourceRequest) -> Dict[str, Any]:
+    try:
+        created = add_custom_source(
+            name=req.name,
+            category=req.category,
+            base_url=req.base_url,
+            description=req.description,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "source": created.model_dump(mode="json"),
+        **list_all_web_sources(),
+    }
+
+
+@router.patch("/web-sources/custom/{source_id}")
+def patch_custom_web_source(source_id: str, req: ToggleCustomWebSourceRequest) -> Dict[str, Any]:
+    try:
+        updated = toggle_custom_source(source_id, req.enabled)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "source": updated.model_dump(mode="json"),
+        **list_all_web_sources(),
+    }
+
+
+@router.delete("/web-sources/custom/{source_id}")
+def remove_custom_web_source(source_id: str) -> Dict[str, Any]:
+    deleted = delete_custom_source(source_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"未找到自定义来源：{source_id}")
+    return {
+        "deleted": True,
+        "source_id": source_id,
+        **list_all_web_sources(),
+    }

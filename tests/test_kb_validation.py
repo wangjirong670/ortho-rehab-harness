@@ -10,7 +10,8 @@ from scripts.validate_kb import validate_all
 def test_knowledge_base_and_cases_are_valid() -> None:
     passed, infos, errors = validate_all()
     assert passed, f"Validation failed: {errors}"
-    assert len(infos) == 4
+    assert len(infos) == 5
+    assert any("web_sources.yaml" in msg for msg in infos)
 
 
 def test_new_rules_and_traceable_references_exist() -> None:

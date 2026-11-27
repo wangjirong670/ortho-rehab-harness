@@ -307,6 +307,10 @@ def replay_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
                 )
             if turn_id:
                 turn_artifacts[str(turn_id)]["scale_results"] = copy.deepcopy(latest_scale_results)
+        elif etype == "web_fetch":
+            fetches = payload.get("web_fetches")
+            if isinstance(fetches, list) and turn_id:
+                turn_artifacts[str(turn_id)]["web_fetches"] = copy.deepcopy(fetches)
         elif etype == "generation":
             content = str(payload.get("content") or "")
             raw_content = str(payload.get("raw_content") or content)
@@ -329,6 +333,9 @@ def replay_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "alerts": copy.deepcopy(turn_artifacts.get(str(turn_id), {}).get("alerts", latest_alerts)),
                 "scale_results": copy.deepcopy(
                     turn_artifacts.get(str(turn_id), {}).get("scale_results", latest_scale_results)
+                ),
+                "web_fetches": copy.deepcopy(
+                    turn_artifacts.get(str(turn_id), {}).get("web_fetches", [])
                 ),
                 "stale": False,
             }
@@ -468,6 +475,20 @@ def render_markdown(events: List[Dict[str, Any]]) -> str:
             blocked_tag = " | [已拦截]" if msg.get("blocked") else ""
             lines.append(f"### 护栏辅助回复（{ts}{model_tag}{blocked_tag}{stale_tag}）")
             lines.append(str(msg.get("content") or ""))
+            wf_list = msg.get("web_fetches") or []
+            wf_citations = [
+                it
+                for wf in wf_list
+                if isinstance(wf, dict) and wf.get("status") == "ok"
+                for it in (wf.get("items") or [])
+            ]
+            if wf_citations:
+                lines.append("")
+                lines.append("**联网参考文献（仅引用，不参与规则判定）**：")
+                for it in wf_citations:
+                    lines.append(
+                        f"- [{it.get('trust_label', '')}] [{it.get('title', '')}]({it.get('url', '')})"
+                    )
             lines.append("")
         else:
             lines.append(f"> 系统提示（{ts}）：{msg.get('content', '')}")

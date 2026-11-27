@@ -45,6 +45,7 @@ class ChatTurnRequest(BaseModel):
     output_mode: Literal["full", "screen"] = "full"
     mock_mode: Optional[bool] = None
     pii_action: Literal["none", "sanitized", "override_raw"] = "none"
+    web_search: bool = False
 
 
 class EducationRequest(BaseModel):
@@ -199,6 +200,7 @@ def chat_in_session(patient_id: str, session_id: str, req: ChatTurnRequest) -> S
                 emit=_emit_cb,
                 mock_mode=req.mock_mode,
                 response_style="clinical_chat",
+                web_search=req.web_search,
             )
 
             # Persist trace events strictly matching session_store contract
@@ -236,6 +238,15 @@ def chat_in_session(patient_id: str, session_id: str, req: ChatTurnRequest) -> S
                 turn_id=turn_id,
                 render_md=False,
             )
+            if result.web_fetches:
+                append_event(
+                    patient_id,
+                    session_id,
+                    "web_fetch",
+                    {"web_fetches": result.web_fetches},
+                    turn_id=turn_id,
+                    render_md=False,
+                )
             append_event(
                 patient_id,
                 session_id,
@@ -280,6 +291,17 @@ def chat_in_session(patient_id: str, session_id: str, req: ChatTurnRequest) -> S
                 diff_event_payload["turn_id"] = turn_id
 
             sync_session_markdown(patient_id, session_id)
+
+            if result.web_fetches:
+                event_queue.put(
+                    {
+                        "event": "web_fetch",
+                        "data": {
+                            "turn_id": turn_id,
+                            "web_fetches": result.web_fetches,
+                        },
+                    }
+                )
 
             if result.reasoning:
                 event_queue.put(

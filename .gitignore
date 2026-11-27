@@ -18,6 +18,7 @@ app_benchmark/results/
 results/
 logs/
 custom_cases/
+custom_web_sources.json
 case_archives/
 
 # Frontend build & dependencies

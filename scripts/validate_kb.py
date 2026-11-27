@@ -22,6 +22,7 @@ from core_tools.schemas import (  # noqa: E402
     DrugConflictsCatalog,
     RedFlagsCatalog,
     ScalesCatalog,
+    WebSourcesCatalog,
 )
 
 
@@ -70,6 +71,14 @@ def validate_all(project_root: Path = PROJECT_ROOT) -> Tuple[bool, List[str], Li
         infos.append(f"[OK] scales_spec.yaml: {len(scales_catalog.scales)} 个量表校验通过 -> {scale_summary}")
     except (OSError, yaml.YAMLError, ValidationError) as exc:
         errors.append(f"[FAIL] scales_spec.yaml: {exc}")
+
+    # 3b. Whitelisted Web Sources
+    ws_path = kb_dir / "web_sources.yaml"
+    try:
+        ws_catalog = WebSourcesCatalog.model_validate(_load_yaml(ws_path))
+        infos.append(f"[OK] web_sources.yaml: {len(ws_catalog.sources)} 个权威医学检索来源校验通过")
+    except (OSError, yaml.YAMLError, ValidationError) as exc:
+        errors.append(f"[FAIL] web_sources.yaml: {exc}")
 
     # 4. Benchmark Test Cases (public + private if present)
     tc_root = project_root / "app_benchmark" / "test_cases"

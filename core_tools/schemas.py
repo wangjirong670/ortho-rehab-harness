@@ -453,3 +453,90 @@ class PatientCard(BaseModel):
             if s and s not in out:
                 out.append(s)
         return out
+
+
+# ==============================================================================
+# 6. Whitelisted Medical Web Sources Schema (knowledge_base/web_sources.yaml)
+# ==============================================================================
+
+WebSourceCategory = Literal["guideline", "drug"]
+WebSourceTrustLevel = Literal["authoritative", "custom_unverified"]
+WebSourceAdapter = Literal[
+    "pubmed_esearch",
+    "openfda_label",
+    "dailymed_spl",
+    "medlineplus_ws",
+    "crossref_works",
+    "clinicaltrials_v2",
+    "html_fetch",
+]
+
+
+class WebSourceSpec(BaseModel):
+    """Schema for an authoritative or custom-whitelisted medical retrieval source."""
+
+    source_id: str = Field(pattern=r"^(SRC|CUSTOM)_[A-Z0-9_]+$")
+    name: str = Field(min_length=2, max_length=120)
+    category: WebSourceCategory
+    domains: List[str] = Field(min_length=1)
+    adapter: WebSourceAdapter
+    base_url: str = Field(min_length=8)
+    trust_level: WebSourceTrustLevel = "authoritative"
+    review_status: ReviewStatus = "clinician_verified"
+    enabled: bool = True
+    description: str = Field(default="", max_length=400)
+    probe_note: str = Field(default="", max_length=300)
+
+    @field_validator("domains")
+    @classmethod
+    def _validate_domains(cls, items: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        for dom in items:
+            host = str(dom or "").strip().lower().rstrip(".")
+            if not host or "://" in host or "/" in host or any(c.isspace() for c in host):
+                raise ValueError(f"Invalid domain entry: '{dom}'")
+            if host not in cleaned:
+                cleaned.append(host)
+        if not cleaned:
+            raise ValueError("domains must contain at least one valid hostname")
+        return cleaned
+
+    @field_validator("base_url")
+    @classmethod
+    def _validate_base_url(cls, val: str) -> str:
+        from urllib.parse import urlparse
+
+        cleaned = str(val or "").strip()
+        parsed = urlparse(cleaned)
+        if parsed.scheme.lower() != "https" or not parsed.hostname:
+            raise ValueError(f"base_url must be a valid https:// URL: '{val}'")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _check_base_url_in_domains(self) -> "WebSourceSpec":
+        from urllib.parse import urlparse
+
+        host = (urlparse(self.base_url).hostname or "").strip().lower()
+        allowed = any(host == d or host.endswith(f".{d}") for d in self.domains)
+        if not allowed:
+            raise ValueError(
+                f"base_url host '{host}' must match one of domains {self.domains}"
+            )
+        return self
+
+
+class WebSourcesCatalog(BaseModel):
+    """Top-level schema for knowledge_base/web_sources.yaml."""
+
+    version: str
+    description: str
+    sources: List[WebSourceSpec] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _ensure_unique_source_ids(self) -> "WebSourcesCatalog":
+        seen: set[str] = set()
+        for src in self.sources:
+            if src.source_id in seen:
+                raise ValueError(f"Duplicate web source_id '{src.source_id}'")
+            seen.add(src.source_id)
+        return self

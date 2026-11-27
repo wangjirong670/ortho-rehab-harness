@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   EyeOff,
+  Globe,
   Loader2,
   Paperclip,
   Send,
@@ -24,6 +25,7 @@ interface ComposerProps {
   defaultModel: string;
   modelCapabilities?: Record<string, ModelCapability>;
   mockMode: boolean;
+  offlineMode?: boolean;
   disabled?: boolean;
   streaming: boolean;
   onSend: (payload: {
@@ -32,6 +34,7 @@ interface ComposerProps {
     thinking: ThinkingLevel;
     output_mode: OutputMode;
     pii_action: "none" | "sanitized" | "override_raw";
+    web_search: boolean;
   }) => Promise<void>;
 }
 
@@ -46,6 +49,7 @@ export const Composer: React.FC<ComposerProps> = ({
   defaultModel,
   modelCapabilities = {},
   mockMode,
+  offlineMode = false,
   disabled = false,
   streaming,
   onSend,
@@ -54,6 +58,7 @@ export const Composer: React.FC<ComposerProps> = ({
   const [selectedModel, setSelectedModel] = useState(defaultModel || availableModels[0] || "");
   const [modelThinking, setModelThinking] = useState<Record<string, ThinkingLevel>>({});
   const [outputMode, setOutputMode] = useState<OutputMode>("full");
+  const [webSearch, setWebSearch] = useState(false);
 
   const [piiFindings, setPiiFindings] = useState<PiiFinding[]>([]);
   const [piiDismissed, setPiiDismissed] = useState(false);
@@ -166,6 +171,7 @@ export const Composer: React.FC<ComposerProps> = ({
       thinking: effectiveThinking,
       output_mode: outputMode,
       pii_action: piiAction,
+      web_search: !offlineMode && !controlsGreyed && webSearch,
     });
   };
 
@@ -332,6 +338,31 @@ export const Composer: React.FC<ComposerProps> = ({
                 setModelThinking((prev) => ({ ...prev, [m]: level }))
               }
             />
+
+            {/* D9 Global Offline-Safe Autonomous Web Search Toggle (default OFF) */}
+            <button
+              type="button"
+              data-testid="web-search-toggle"
+              disabled={offlineMode || controlsGreyed}
+              onClick={() => !offlineMode && !controlsGreyed && setWebSearch((v) => !v)}
+              title={
+                offlineMode
+                  ? "全局离线模式已开启，联网检索已禁用（可在设置中关闭离线模式）"
+                  : controlsGreyed
+                    ? "简要筛查仅运行本地确定性规则，不执行外部检索"
+                    : "开启后允许模型在本轮自主检索权威医学指南/药品白名单（查询词强制脱敏，仅作引用）"
+              }
+              className={`inline-flex items-center gap-1 rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold transition ${
+                offlineMode || controlsGreyed
+                  ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                  : webSearch
+                    ? "border-cyan-600 bg-cyan-700 text-white shadow-sm"
+                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <Globe className="h-3.5 w-3.5" />
+              <span>{offlineMode ? "离线禁用" : webSearch ? "联网:开" : "联网"}</span>
+            </button>
           </div>
 
           <div className="flex items-center gap-1.5">

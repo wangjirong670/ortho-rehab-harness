@@ -155,7 +155,9 @@ def is_forbidden_bundle_path(rel_posix: str, *, allow_third_party_pem: bool = Fa
     if filename.endswith(".pem") and not allow_third_party_pem:
         return True
 
-    # Secrets / .env files (keep .env.example only)
+    # Secrets / .env / runtime user config files (keep .env.example only)
+    if filename == "custom_web_sources.json":
+        return True
     if filename == ".env" or (filename.startswith(".env.") and filename != ".env.example"):
         return True
     if norm.endswith(".streamlit/secrets.toml"):

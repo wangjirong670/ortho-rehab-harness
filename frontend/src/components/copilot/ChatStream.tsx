@@ -9,7 +9,9 @@ import {
   ChevronRight,
   ClipboardCheck,
   Copy,
+  ExternalLink,
   FileSearch,
+  Globe,
   Info,
   Loader2,
   ShieldAlert,
@@ -23,6 +25,7 @@ import type {
   SessionEducationItem,
   SessionMessage,
   UnifiedAlert,
+  WebFetchRecord,
 } from "../../api/types";
 import { MarkdownView } from "../MarkdownView";
 import { getClinicalActionLabel, SEVERITY_LABELS } from "../../utils/labels";
@@ -34,6 +37,7 @@ interface ChatStreamProps {
   streaming: boolean;
   liveSteps: ChatStepEvent[];
   liveAlerts: UnifiedAlert[];
+  liveWebFetches?: WebFetchRecord[];
   liveAlertsTurnId?: string | null;
   generatingEdu: boolean;
   defaultExpandSteps?: boolean;
@@ -192,6 +196,140 @@ const ReasoningBlockL3: React.FC<{
   );
 };
 
+const WebFetchCards: React.FC<{ fetches?: WebFetchRecord[] }> = ({ fetches }) => {
+  const [open, setOpen] = useState(true);
+  if (!fetches || fetches.length === 0) return null;
+
+  const totalItems = fetches.reduce((acc, rec) => acc + (rec.items?.length || 0), 0);
+  const hasBlocked = fetches.some(
+    (r) =>
+      r.status === "blocked_or_unavailable" ||
+      r.status === "offline_disabled" ||
+      r.status === "pii_blocked"
+  );
+
+  return (
+    <div
+      data-testid="web-fetch-cards"
+      className="mb-3 rounded-2xl border border-cyan-200/80 bg-cyan-50/45 p-2.5 text-xs"
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full flex-wrap items-center justify-between gap-2 text-left"
+      >
+        <span className="flex flex-wrap items-center gap-1.5 font-semibold text-cyan-950">
+          {open ? (
+            <ChevronDown className="h-3.5 w-3.5 text-cyan-700" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 text-cyan-700" />
+          )}
+          <Globe className="h-3.5 w-3.5 text-cyan-700" />
+          <span>联网医学检索与出处（仅供参考，不参与规则判定）</span>
+          <span
+            className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+              hasBlocked
+                ? "bg-amber-100 text-amber-900"
+                : "bg-cyan-100 text-cyan-900"
+            }`}
+          >
+            {totalItems > 0 ? `${totalItems} 条文献` : fetches[0]?.status_label || "已完成"}
+          </span>
+        </span>
+        <span className="text-[10px] text-slate-400">{open ? "收起" : "展开"}</span>
+      </button>
+
+      {open && (
+        <div className="mt-2 space-y-2 border-t border-cyan-100 pt-2">
+          {fetches.map((rec) => (
+            <div key={rec.query_id} className="space-y-1.5 rounded-xl bg-white/90 p-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">
+                    {rec.category === "drug" ? "药品说明书" : "临床指南"}
+                  </span>
+                  <span className="font-mono font-semibold text-slate-800">
+                    {rec.sanitized_query || "(查询词已拦截)"}
+                  </span>
+                  {rec.pii_redacted && (
+                    <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-800">
+                      PII 已自动脱敏
+                    </span>
+                  )}
+                </div>
+                <span className="text-[10px] text-slate-500">{rec.status_label}</span>
+              </div>
+
+              {rec.rationale && (
+                <div className="text-[11px] text-slate-500">检索动机：{rec.rationale}</div>
+              )}
+
+              {rec.errors && rec.errors.length > 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
+                  {rec.errors.join("；")}
+                </div>
+              )}
+
+              {rec.items && rec.items.length > 0 && (
+                <div className="space-y-1.5 pt-1">
+                  {rec.items.map((item, idx) => {
+                    const isAuth = item.trust_level === "authoritative";
+                    return (
+                      <div
+                        key={`${rec.query_id}-${idx}`}
+                        className={`rounded-xl border p-2 text-[11px] ${
+                          isAuth
+                            ? "border-emerald-200/80 bg-emerald-50/40"
+                            : "border-dashed border-amber-300 bg-amber-50/50"
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                isAuth
+                                  ? "bg-emerald-700 text-white"
+                                  : "border border-amber-400 bg-amber-100 text-amber-900"
+                              }`}
+                            >
+                              {item.trust_label}
+                            </span>
+                            <span className="font-semibold text-slate-800">
+                              {item.source_name}
+                            </span>
+                            {item.published_at && (
+                              <span className="text-[10px] text-slate-400">
+                                {item.published_at}
+                              </span>
+                            )}
+                          </div>
+                          {item.url && (
+                            <a
+                              href={item.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-cyan-700 hover:underline"
+                            >
+                              原文链接
+                              <ExternalLink className="h-2.5 w-2.5" />
+                            </a>
+                          )}
+                        </div>
+                        <div className="mt-1 font-semibold text-slate-900">{item.title}</div>
+                        <div className="mt-0.5 leading-relaxed text-slate-600">{item.snippet}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const ChatStream: React.FC<ChatStreamProps> = ({
   patientCard,
   messages,
@@ -199,6 +337,7 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
   streaming,
   liveSteps,
   liveAlerts,
+  liveWebFetches = [],
   generatingEdu,
   defaultExpandSteps = false,
   onGenerateEducation,
@@ -341,6 +480,8 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
                 verification={msg.reasoning_verification}
               />
 
+              <WebFetchCards fetches={msg.web_fetches} />
+
               <div className="text-sm leading-relaxed text-slate-800">
                 <MarkdownView content={msg.content} />
               </div>
@@ -449,6 +590,10 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
                 <AlertCardInline key={`live-${al.rule_id}-${i}`} alert={al} />
               ))}
             </div>
+          )}
+
+          {streaming && liveWebFetches.length > 0 && (
+            <WebFetchCards fetches={liveWebFetches} />
           )}
         </div>
       )}

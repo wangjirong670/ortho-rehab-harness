@@ -1,0 +1,85 @@
+version: "1.0.0"
+description: "骨伤科与康复科内置权威医学文献及药品说明书检索白名单（均已验证 HTTPS 公开 API 可达性，外部内容仅作引用参考，永不替代确定性红旗与用药冲突判定）。"
+
+sources:
+  - source_id: "SRC_PUBMED"
+    name: "PubMed / NCBI E-utilities"
+    category: "guideline"
+    domains:
+      - "eutils.ncbi.nlm.nih.gov"
+      - "pubmed.ncbi.nlm.nih.gov"
+    adapter: "pubmed_esearch"
+    base_url: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+    trust_level: "authoritative"
+    review_status: "clinician_verified"
+    enabled: true
+    description: "美国国立医学图书馆（NCBI/NLM）生物医学文献与临床指南检索接口，返回标题、发表日期、期刊及 PMID 原文链接。"
+    probe_note: "HTTP 200 (esearch + esummary JSON 可直接访问，无需登录)"
+
+  - source_id: "SRC_OPENFDA"
+    name: "OpenFDA 药品说明书安全库"
+    category: "drug"
+    domains:
+      - "api.fda.gov"
+      - "open.fda.gov"
+    adapter: "openfda_label"
+    base_url: "https://api.fda.gov/drug/label.json"
+    trust_level: "authoritative"
+    review_status: "clinician_verified"
+    enabled: true
+    description: "美国 FDA 公开药品说明书 API，用于检索药品黑框警告、禁忌症（contraindications）与药物相互作用。"
+    probe_note: "HTTP 200 (REST JSON API 直接返回说明书字段)"
+
+  - source_id: "SRC_DAILYMED"
+    name: "NLM DailyMed 官方药品专论"
+    category: "drug"
+    domains:
+      - "dailymed.nlm.nih.gov"
+    adapter: "dailymed_spl"
+    base_url: "https://dailymed.nlm.nih.gov/dailymed/services/v2/"
+    trust_level: "authoritative"
+    review_status: "clinician_verified"
+    enabled: true
+    description: "NIH 国家医学图书馆官方药品 SPL 说明书索引库，核对上市药品更新日期与官方链接。"
+    probe_note: "HTTP 200 (services/v2/spls.json 可直接检索)"
+
+  - source_id: "SRC_MEDLINEPLUS"
+    name: "MedlinePlus Health Topics (NLM)"
+    category: "guideline"
+    domains:
+      - "wsearch.nlm.nih.gov"
+      - "medlineplus.gov"
+    adapter: "medlineplus_ws"
+    base_url: "https://wsearch.nlm.nih.gov/ws/query"
+    trust_level: "authoritative"
+    review_status: "clinician_verified"
+    enabled: true
+    description: "NLM 临床健康主题权威百科检索接口，适合检索骨关节、脊柱及康复护理标准化摘要。"
+    probe_note: "HTTP 200 (XML Web Service 直接返回主题与摘要)"
+
+  - source_id: "SRC_CROSSREF"
+    name: "Crossref DOI 学术指南索引"
+    category: "guideline"
+    domains:
+      - "api.crossref.org"
+      - "doi.org"
+    adapter: "crossref_works"
+    base_url: "https://api.crossref.org/works"
+    trust_level: "authoritative"
+    review_status: "clinician_verified"
+    enabled: true
+    description: "Crossref 开放学术文献元数据接口，检索最新同行评议骨伤康复指南与 DOI 链接。"
+    probe_note: "HTTP 200 (works JSON API 直接返回题录与 DOI)"
+
+  - source_id: "SRC_CLINICALTRIALS"
+    name: "ClinicalTrials.gov 临床试验登记库"
+    category: "guideline"
+    domains:
+      - "clinicaltrials.gov"
+    adapter: "clinicaltrials_v2"
+    base_url: "https://clinicaltrials.gov/api/v2/studies"
+    trust_level: "authoritative"
+    review_status: "clinician_verified"
+    enabled: true
+    description: "美国国立卫生研究院临床研究登记库 v2 接口，补充康复方案临床试验背景。"
+    probe_note: "HTTP 200 (v2 studies JSON 直接返回试验标题与 NCT 链接)"

@@ -335,12 +335,61 @@ export interface ModelCapability {
   note: string;
 }
 
+export interface WebSourceSpec {
+  source_id: string;
+  name: string;
+  category: "guideline" | "drug";
+  domains: string[];
+  adapter: string;
+  base_url: string;
+  trust_level: "authoritative" | "custom_unverified";
+  review_status: string;
+  enabled: boolean;
+  description: string;
+  probe_note?: string;
+}
+
+export interface WebSourcesResponse {
+  offline_mode: boolean;
+  authoritative_sources: WebSourceSpec[];
+  custom_sources: WebSourceSpec[];
+}
+
+export interface WebFetchItem {
+  source_id: string;
+  source_name: string;
+  trust_level: "authoritative" | "custom_unverified";
+  trust_label: string;
+  category: "guideline" | "drug";
+  title: string;
+  url: string;
+  snippet: string;
+  published_at?: string;
+  mock?: boolean;
+}
+
+export interface WebFetchRecord {
+  query_id: string;
+  raw_query: string;
+  sanitized_query: string;
+  category: "guideline" | "drug";
+  rationale: string;
+  pii_redacted: boolean;
+  status: "ok" | "empty" | "offline_disabled" | "pii_blocked" | "blocked_or_unavailable" | "no_sources";
+  status_label: string;
+  source_ids: string[];
+  items: WebFetchItem[];
+  errors: string[];
+  latency_ms: number;
+}
+
 export interface SessionMessage {
   role: "user" | "assistant" | "system";
   content: string;
   raw_content?: string;
   reasoning?: string;
   reasoning_verification?: ReasoningVerification;
+  web_fetches?: WebFetchRecord[];
   turn_id?: string | null;
   ts?: string;
   model?: string | null;
@@ -760,6 +809,7 @@ export interface SettingsLlmResponse {
   copilot_default_model: string;
   benchmark_models: string | string[];
   llm_mock_mode: boolean;
+  offline_mode?: boolean;
   preset_models: string[];
   model_capabilities?: Record<string, ModelCapability>;
   providers: ProviderConfigItem[] | Record<string, ProviderConfigItem>;
@@ -828,6 +878,7 @@ export interface UpdateSettingsLlmRequest {
   copilot_default_model?: string;
   benchmark_models?: string;
   llm_mock_mode?: boolean;
+  offline_mode?: boolean;
   env_updates?: Record<string, string>;
 }
 

@@ -18,6 +18,7 @@ import type {
   SessionSummary,
   ThinkingLevel,
   UnifiedAlert,
+  WebFetchRecord,
 } from "../../api/types";
 import { Modal } from "../Modal";
 import { AuditModal } from "./AuditModal";
@@ -32,6 +33,7 @@ interface CopilotWorkspaceProps {
   defaultModel: string;
   modelCapabilities?: Record<string, ModelCapability>;
   mockMode: boolean;
+  offlineMode?: boolean;
   scalesCatalog: ScaleSpec[];
   defaultExpandSteps?: boolean;
   onRenderSidebarSlot?: (node: React.ReactNode) => void;
@@ -43,6 +45,7 @@ export const CopilotWorkspace: React.FC<CopilotWorkspaceProps> = ({
   defaultModel,
   modelCapabilities = {},
   mockMode,
+  offlineMode = false,
   scalesCatalog,
   defaultExpandSteps = false,
   onRenderSidebarSlot,
@@ -61,6 +64,7 @@ export const CopilotWorkspace: React.FC<CopilotWorkspaceProps> = ({
   const [streaming, setStreaming] = useState(false);
   const [liveSteps, setLiveSteps] = useState<ChatStepEvent[]>([]);
   const [liveAlerts, setLiveAlerts] = useState<UnifiedAlert[]>([]);
+  const [liveWebFetches, setLiveWebFetches] = useState<WebFetchRecord[]>([]);
   const [liveAlertsTurnId, setLiveAlertsTurnId] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [generatingEdu, setGeneratingEdu] = useState(false);
@@ -248,12 +252,14 @@ export const CopilotWorkspace: React.FC<CopilotWorkspaceProps> = ({
     thinking: ThinkingLevel;
     output_mode: OutputMode;
     pii_action: "none" | "sanitized" | "override_raw";
+    web_search: boolean;
   }) => {
     if (!selectedPatientId || !selectedSessionId) return;
     setStreamError(null);
     setStreaming(true);
     setLiveSteps([]);
     setLiveAlerts([]);
+    setLiveWebFetches([]);
     setLiveAlertsTurnId(null);
 
     // Optimistic append of user message while streaming
@@ -289,6 +295,7 @@ export const CopilotWorkspace: React.FC<CopilotWorkspaceProps> = ({
           output_mode: payload.output_mode,
           mock_mode: mockMode,
           pii_action: payload.pii_action,
+          web_search: payload.web_search,
         },
         {
           onStep: (ev) => {
@@ -301,6 +308,9 @@ export const CopilotWorkspace: React.FC<CopilotWorkspaceProps> = ({
               }
               return [...prev, ev];
             });
+          },
+          onWebFetch: (ev) => {
+            setLiveWebFetches(ev.web_fetches || []);
           },
           onAlert: (ev) => {
             const alerts = ev.unified_alerts || [];
@@ -623,6 +633,7 @@ export const CopilotWorkspace: React.FC<CopilotWorkspaceProps> = ({
               streaming={streaming}
               liveSteps={liveSteps}
               liveAlerts={liveAlerts}
+              liveWebFetches={liveWebFetches}
               liveAlertsTurnId={liveAlertsTurnId}
               generatingEdu={generatingEdu}
               defaultExpandSteps={defaultExpandSteps}
@@ -639,6 +650,7 @@ export const CopilotWorkspace: React.FC<CopilotWorkspaceProps> = ({
               defaultModel={defaultModel}
               modelCapabilities={modelCapabilities}
               mockMode={mockMode}
+              offlineMode={offlineMode}
               streaming={streaming}
               onSend={handleSendChat}
             />

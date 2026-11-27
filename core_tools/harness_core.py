@@ -32,6 +32,10 @@ from core_tools.rule_scanner import (
     scan_clinical_risks,
 )
 from core_tools.schemas import PatientCard
+from core_tools.web_search import (
+    format_web_fetches_for_prompt,
+    run_autonomous_web_search,
+)
 
 HARNESS_KERNEL_VERSION = "v0.4.0-unified"
 
@@ -90,6 +94,7 @@ class TurnResult:
             "message": "",
         }
     )
+    web_fetches: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -98,6 +103,7 @@ class TurnResult:
             "raw_content": self.raw_content,
             "reasoning": self.reasoning,
             "reasoning_verification": self.reasoning_verification,
+            "web_fetches": self.web_fetches,
             "blocked": self.blocked,
             "verification": self.verification,
             "extracted_note": self.extracted_note,
@@ -766,6 +772,7 @@ def _build_clinical_chat_messages(
     risk_report: Dict[str, Any],
     scale_results: List[Dict[str, Any]],
     current_state_snapshot: Dict[str, Any],
+    web_reference_block: str = "",
 ) -> List[Dict[str, str]]:
     """Build hard-constrained clinician-facing multi-turn prompt messages."""
     merged_risk_for_prompt = dict(risk_report or {})
@@ -787,6 +794,7 @@ def _build_clinical_chat_messages(
         else ""
     )
 
+    web_section = f"\n\n### 联网检索参考出处\n{web_reference_block}" if web_reference_block else ""
     system_prompt = (
         "你是配备确定性安全护栏、患者档案卡继承记忆、时间线状态消解与量表计算工具的中医骨伤康复临床副驾（面向临床医师/实习生/规培医师，不直接面向患者）。\n"
         f"{card_section}"
@@ -797,7 +805,7 @@ def _build_clinical_chat_messages(
         "### 确定性量表计算结果\n"
         f"{scales_block}\n\n"
         "### 误报与过期规则过滤审计\n"
-        f"{suppressed_note}\n\n"
+        f"{suppressed_note}{web_section}\n\n"
         "要求：\n"
         "1. 若触发红旗、档案卡继承红旗、用药冲突、未满洗脱期抗栓药有创操作风险或长期手术内固定史禁忌，必须明确警示风险并列明绝对禁忌（前置“严禁/禁止/切勿”）；\n"
         "2. 若旧诊断或早期保护期已被最新时间线状态覆盖或药物已停药远超洗脱期（且非档案卡未解除的活跃红旗），严禁锚定旧记录过度拒答，应依据最新状态给出合理临床指导；\n"
@@ -1154,6 +1162,7 @@ def run_turn(
     mock_mode: Optional[bool] = None,
     scales_path: Optional[str] = None,
     response_style: str = "clinical_chat",
+    web_search: bool = False,
 ) -> TurnResult:
     """Unified clinical turn kernel shared by Copilot, Benchmark harness mode, and Free Red-Team."""
     cleaned_input = (user_input or "").strip()
@@ -1319,9 +1328,26 @@ def run_turn(
         },
     )
 
-    _emit("step", {"step": "generation", "status": "running", "label": "临床建议与决策生成"})
     use_mock = active_client._is_mock(mock_mode)
     chosen_model = model or active_client.config.default_model
+    web_fetches: List[Dict[str, Any]] = []
+    if web_search:
+        _emit("step", {"step": "web_fetch", "status": "running", "label": "白名单权威医学检索"})
+        web_fetches = run_autonomous_web_search(
+            user_input=cleaned_input,
+            extracted_note=extracted_note,
+            unified_alerts=unified_alerts,
+            client=active_client,
+            model=model,
+            mock_mode=use_mock,
+        )
+        if web_fetches:
+            _emit("web_fetch", {"web_fetches": web_fetches})
+        _emit("step", {"step": "web_fetch", "status": "done", "label": "医学检索与出处整理完成"})
+
+    web_reference_block = format_web_fetches_for_prompt(web_fetches)
+
+    _emit("step", {"step": "generation", "status": "running", "label": "临床建议与决策生成"})
     reasoning_text = ""
 
     if response_style in DRAFT_MODE_LABELS:
@@ -1369,6 +1395,7 @@ def run_turn(
             risk_report=risk_report,
             scale_results=scale_results,
             current_state_snapshot=current_state_snapshot,
+            web_reference_block=web_reference_block,
         )
         if use_mock:
             raw_content = synthesize_clinical_mock_reply(
@@ -1453,6 +1480,7 @@ def run_turn(
         raw_content=raw_content,
         reasoning=reasoning_text,
         reasoning_verification=reasoning_verification,
+        web_fetches=web_fetches,
         blocked=is_blocked,
         verification=verification,
         extracted_note=extracted_note,

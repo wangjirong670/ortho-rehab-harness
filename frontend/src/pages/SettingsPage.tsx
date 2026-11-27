@@ -5,13 +5,17 @@ import {
   BookOpenCheck,
   CheckCircle2,
   Cpu,
+  ExternalLink,
   Globe,
   KeyRound,
+  PlusCircle,
   RefreshCw,
   Save,
   Server,
   ShieldCheck,
   Sliders,
+  Trash2,
+  WifiOff,
   XCircle,
 } from "lucide-react";
 import {
@@ -28,10 +32,11 @@ import type {
   ProviderConfigItem,
   SettingsLlmResponse,
   TestConnectionResponse,
+  WebSourcesResponse,
 } from "../api/types";
 import { KnowledgeBasePanel } from "../components/KnowledgeBasePanel";
 
-export type SettingsTabKey = "models" | "privacy" | "preferences" | "kb" | "about";
+export type SettingsTabKey = "models" | "web_sources" | "privacy" | "preferences" | "kb" | "about";
 
 interface SettingsPageProps {
   settings: SettingsLlmResponse | null;
@@ -144,6 +149,31 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  // Web sources whitelist state (v0.4 P3)
+  const [webSources, setWebSources] = useState<WebSourcesResponse | null>(null);
+  const [webSourcesLoading, setWebSourcesLoading] = useState(false);
+  const [customName, setCustomName] = useState("");
+  const [customCategory, setCustomCategory] = useState<"guideline" | "drug">("guideline");
+  const [customUrl, setCustomUrl] = useState("");
+  const [customDesc, setCustomDesc] = useState("");
+  const [webSourceBusy, setWebSourceBusy] = useState(false);
+
+  const loadWebSources = async () => {
+    setWebSourcesLoading(true);
+    try {
+      const data = await api.getWebSources();
+      setWebSources(data);
+    } catch {
+      // non-fatal
+    } finally {
+      setWebSourcesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadWebSources();
+  }, []);
 
   useEffect(() => {
     if (!settings) return;
@@ -300,6 +330,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
   const TABS: Array<{ key: SettingsTabKey; label: string; icon: React.FC<{ className?: string }> }> = [
     { key: "models", label: "模型与接口", icon: Cpu },
+    { key: "web_sources", label: "联网检索白名单", icon: Globe },
     { key: "privacy", label: "隐私与安全", icon: ShieldCheck },
     { key: "preferences", label: "显示偏好", icon: Sliders },
     { key: "kb", label: "医学知识库（只读）", icon: BookOpenCheck },
@@ -344,6 +375,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
               <button
                 key={t.key}
                 type="button"
+                data-testid={`settings-tab-${t.key}`}
                 onClick={() => setActiveTab(t.key)}
                 className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
                   active
@@ -731,6 +763,288 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 </div>
               </section>
             )}
+        </div>
+      )}
+
+      {/* Tab 1b: Web Search Whitelist & Two-Tier Trust (v0.4 P3) */}
+      {activeTab === "web_sources" && (
+        <div className="space-y-4">
+          <section className="glass-surface space-y-3 rounded-3xl p-5 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                  <WifiOff className="h-4 w-4 text-cyan-700" />
+                  全局离线模式与检索边界
+                </h2>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  开启离线模式（<code>ORTHO_OFFLINE_MODE=true</code>）后，副驾「🌐 联网」开关自动置灰禁用。联网结果仅作文献参考，绝不参与红旗或用药冲突判定。
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                data-testid="offline-mode-switch"
+                aria-checked={Boolean(settings?.offline_mode ?? webSources?.offline_mode)}
+                disabled={webSourceBusy}
+                onClick={async () => {
+                  const current = Boolean(settings?.offline_mode ?? webSources?.offline_mode);
+                  setWebSourceBusy(true);
+                  setFeedback(null);
+                  try {
+                    const updated = await api.updateLlmSettings({ offline_mode: !current });
+                    onSettingsUpdated(updated);
+                    await loadWebSources();
+                    setFeedback({
+                      type: "ok",
+                      text: !current
+                        ? "已开启全局离线模式，已禁止一切对外联网检索。"
+                        : "已关闭全局离线模式，允许按需使用白名单联网检索。",
+                    });
+                  } catch (err) {
+                    setFeedback({
+                      type: "err",
+                      text: err instanceof Error ? err.message : "切换离线模式失败",
+                    });
+                  } finally {
+                    setWebSourceBusy(false);
+                  }
+                }}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                  settings?.offline_mode ?? webSources?.offline_mode
+                    ? "bg-amber-600"
+                    : "bg-slate-300"
+                }`}
+              >
+                <span
+                  className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${
+                    settings?.offline_mode ?? webSources?.offline_mode
+                      ? "translate-x-5"
+                      : "translate-x-0"
+                  }`}
+                />
+              </button>
+            </div>
+          </section>
+
+          {/* Tier 1: Built-in Authoritative Sources */}
+          <section className="glass-surface space-y-3 rounded-3xl p-5 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">
+                  一级信任：内置权威医学检索白名单（只读）
+                </h2>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  来源于 <code>knowledge_base/web_sources.yaml</code>（均经过 Schema 与 <code>validate_kb.py</code> 校验，实测 HTTP 200 可达）。
+                </p>
+              </div>
+              <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-bold text-emerald-800">
+                {(webSources?.authoritative_sources || []).length} 个权威来源
+              </span>
+            </div>
+
+            {webSourcesLoading ? (
+              <div className="py-4 text-center text-slate-500">正在加载白名单配置...</div>
+            ) : (
+              <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
+                {(webSources?.authoritative_sources || []).map((src) => (
+                  <div
+                    key={src.source_id}
+                    className="clinical-paper space-y-1 rounded-2xl border border-emerald-200/80 p-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="rounded-full bg-emerald-700 px-2 py-0.5 text-[10px] font-bold text-white">
+                          权威来源
+                        </span>
+                        <span className="font-bold text-slate-900">{src.name}</span>
+                      </div>
+                      <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-600">
+                        {src.category === "drug" ? "药品安全库" : "指南文献"} · {src.source_id}
+                      </span>
+                    </div>
+                    <p className="text-[11px] leading-relaxed text-slate-600">{src.description}</p>
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-[10px] text-slate-500">
+                      <span className="font-mono">{src.domains.join(", ")}</span>
+                      <a
+                        href={src.base_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-0.5 font-semibold text-cyan-700 hover:underline"
+                      >
+                        接口域名
+                        <ExternalLink className="h-2.5 w-2.5" />
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Tier 2: User Custom Sources */}
+          <section className="glass-surface space-y-3 rounded-3xl p-5 text-xs">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">
+                二级信任：用户自定义白名单来源（降级标记）
+              </h2>
+              <p className="mt-0.5 text-[11px] text-slate-500">
+                仅允许公开 <code>https://</code> 域名（自动拦截内网/环回 IP 防 SSRF），命中结果固定标注「用户自定义 · 未经审核」虚线琥珀标识。
+              </p>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!customName.trim() || !customUrl.trim()) return;
+                setWebSourceBusy(true);
+                setFeedback(null);
+                try {
+                  const res = await api.addCustomWebSource({
+                    name: customName.trim(),
+                    category: customCategory,
+                    base_url: customUrl.trim(),
+                    description: customDesc.trim(),
+                  });
+                  setWebSources({
+                    offline_mode: res.offline_mode,
+                    authoritative_sources: res.authoritative_sources,
+                    custom_sources: res.custom_sources,
+                  });
+                  setCustomName("");
+                  setCustomUrl("");
+                  setCustomDesc("");
+                  setFeedback({ type: "ok", text: "已添加用户自定义检索来源。" });
+                } catch (err) {
+                  setFeedback({
+                    type: "err",
+                    text: err instanceof Error ? err.message : "添加自定义来源失败",
+                  });
+                } finally {
+                  setWebSourceBusy(false);
+                }
+              }}
+              className="clinical-paper grid grid-cols-1 gap-2 rounded-2xl p-3 sm:grid-cols-12"
+            >
+              <input
+                type="text"
+                required
+                value={customName}
+                onChange={(e) => setCustomName(e.target.value)}
+                placeholder="来源名称（如 院内循证指南镜像）"
+                data-testid="custom-web-name-input"
+                className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs sm:col-span-3"
+              />
+              <select
+                value={customCategory}
+                onChange={(e) => setCustomCategory(e.target.value as "guideline" | "drug")}
+                className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs sm:col-span-2"
+              >
+                <option value="guideline">临床指南</option>
+                <option value="drug">药品安全</option>
+              </select>
+              <input
+                type="url"
+                required
+                value={customUrl}
+                onChange={(e) => setCustomUrl(e.target.value)}
+                placeholder="https://example.org/guide"
+                data-testid="custom-web-url-input"
+                className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs sm:col-span-4"
+              />
+              <input
+                type="text"
+                value={customDesc}
+                onChange={(e) => setCustomDesc(e.target.value)}
+                placeholder="备注说明（可选）"
+                className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs sm:col-span-2"
+              />
+              <button
+                type="submit"
+                disabled={webSourceBusy}
+                data-testid="add-custom-web-btn"
+                className="inline-flex items-center justify-center gap-1 rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50 sm:col-span-1"
+              >
+                <PlusCircle className="h-3.5 w-3.5" />
+                添加
+              </button>
+            </form>
+
+            {(webSources?.custom_sources || []).length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-200 py-5 text-center text-slate-400">
+                暂无用户自定义检索来源
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {(webSources?.custom_sources || []).map((src) => (
+                  <div
+                    key={src.source_id}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-dashed border-amber-300 bg-amber-50/50 px-3.5 py-2.5"
+                  >
+                    <div className="min-w-0 flex-1 space-y-0.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="rounded-full border border-amber-400 bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">
+                          用户自定义 · 未经审核
+                        </span>
+                        <span className="font-bold text-slate-900">{src.name}</span>
+                        <span className="font-mono text-[10px] text-slate-500">{src.base_url}</span>
+                      </div>
+                      <div className="text-[11px] text-slate-600">{src.description}</div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={webSourceBusy}
+                        onClick={async () => {
+                          setWebSourceBusy(true);
+                          try {
+                            const res = await api.toggleCustomWebSource(src.source_id, !src.enabled);
+                            setWebSources({
+                              offline_mode: res.offline_mode,
+                              authoritative_sources: res.authoritative_sources,
+                              custom_sources: res.custom_sources,
+                            });
+                          } finally {
+                            setWebSourceBusy(false);
+                          }
+                        }}
+                        className={`rounded-xl px-2.5 py-1 text-[11px] font-semibold ${
+                          src.enabled
+                            ? "bg-emerald-100 text-emerald-800"
+                            : "bg-slate-200 text-slate-600"
+                        }`}
+                      >
+                        {src.enabled ? "已启用" : "已停用"}
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={webSourceBusy}
+                        data-testid={`delete-custom-web-${src.source_id}`}
+                        onClick={async () => {
+                          setWebSourceBusy(true);
+                          try {
+                            const res = await api.deleteCustomWebSource(src.source_id);
+                            setWebSources({
+                              offline_mode: res.offline_mode,
+                              authoritative_sources: res.authoritative_sources,
+                              custom_sources: res.custom_sources,
+                            });
+                          } finally {
+                            setWebSourceBusy(false);
+                          }
+                        }}
+                        className="rounded-xl border border-rose-200 bg-white p-1.5 text-rose-600 hover:bg-rose-50"
+                        title="删除此自定义来源"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
       )}
 

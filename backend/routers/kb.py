@@ -19,6 +19,7 @@ from core_tools.rule_scanner import (
     load_drug_conflicts_catalog,
     load_red_flags_catalog,
 )
+from core_tools.web_search import list_all_web_sources
 
 router = APIRouter(prefix="/kb", tags=["kb"])
 
@@ -28,10 +29,12 @@ def get_kb_overview() -> Dict[str, Any]:
     red_flags = load_red_flags_catalog().model_dump()
     drug_conflicts = load_drug_conflicts_catalog().model_dump()
     scales = load_scales_catalog().model_dump()
+    web_sources = list_all_web_sources()
     return {
         "red_flags": red_flags,
         "drug_conflicts": drug_conflicts,
         "scales": scales,
+        "web_sources": web_sources,
         "labels": {
             "clinical_actions": CLINICAL_ACTION_ZH,
             "tcm_fields": TCM_FIELD_LABELS,

@@ -36,6 +36,8 @@ import type {
   UpdateSettingsLlmRequest,
   UploadResponse,
   VerificationResult,
+  WebFetchRecord,
+  WebSourcesResponse,
 } from "./types";
 
 export const STORAGE_KEYS = {
@@ -176,6 +178,7 @@ export interface ChatStreamHandlers {
     reasoning: string;
     reasoning_verification?: ReasoningVerification;
   }) => void;
+  onWebFetch?: (ev: { turn_id?: string; web_fetches: WebFetchRecord[] }) => void;
   onContent?: (ev: ChatContentEvent) => void;
   onVerification?: (ev: VerificationResult & { turn_id?: string }) => void;
   onCardDiff?: (ev: CardDiffPayload) => void;
@@ -357,6 +360,7 @@ export const api = {
       output_mode?: OutputMode;
       mock_mode?: boolean;
       pii_action?: "none" | "sanitized" | "override_raw";
+      web_search?: boolean;
     },
     handlers: ChatStreamHandlers,
     signal?: AbortSignal
@@ -416,6 +420,13 @@ export const api = {
             turn_id?: string;
             reasoning: string;
             reasoning_verification?: ReasoningVerification;
+          }
+        );
+      } else if (eventName === "web_fetch") {
+        handlers.onWebFetch?.(
+          parsed as unknown as {
+            turn_id?: string;
+            web_fetches: WebFetchRecord[];
           }
         );
       } else if (eventName === "content") {
@@ -671,5 +682,47 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  },
+
+  // ---------------- Web Sources Whitelist (v0.4 P3) ----------------
+  getWebSources(): Promise<WebSourcesResponse> {
+    return apiRequest<WebSourcesResponse>("/api/v1/settings/web-sources");
+  },
+
+  addCustomWebSource(payload: {
+    name: string;
+    category: "guideline" | "drug";
+    base_url: string;
+    description?: string;
+  }): Promise<WebSourcesResponse & { source: unknown }> {
+    return apiRequest<WebSourcesResponse & { source: unknown }>(
+      "/api/v1/settings/web-sources/custom",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  toggleCustomWebSource(
+    sourceId: string,
+    enabled: boolean
+  ): Promise<WebSourcesResponse & { source: unknown }> {
+    return apiRequest<WebSourcesResponse & { source: unknown }>(
+      `/api/v1/settings/web-sources/custom/${encodeURIComponent(sourceId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ enabled }),
+      }
+    );
+  },
+
+  deleteCustomWebSource(sourceId: string): Promise<WebSourcesResponse & { deleted: boolean }> {
+    return apiRequest<WebSourcesResponse & { deleted: boolean }>(
+      `/api/v1/settings/web-sources/custom/${encodeURIComponent(sourceId)}`,
+      {
+        method: "DELETE",
+      }
+    );
   },
 };
