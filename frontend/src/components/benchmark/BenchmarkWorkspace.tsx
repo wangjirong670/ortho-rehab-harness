@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
+  ChevronDown,
   Download,
   Filter,
   Loader2,
@@ -123,12 +125,34 @@ export const BenchmarkWorkspace: React.FC<BenchmarkWorkspaceProps> = ({
     return defaultModel ? [defaultModel] : ["deepseek/deepseek-chat"];
   });
   const [customModelInput, setCustomModelInput] = useState("");
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const [runModes, setRunModes] = useState<Array<"bare_llm" | "harness_copilot">>([
     "bare_llm",
     "harness_copilot",
   ]);
   const [runMockMode, setRunMockMode] = useState<boolean>(defaultMockMode);
   const [includePrivate, setIncludePrivate] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!modelMenuOpen) return;
+    const handleMouseDown = (e: MouseEvent) => {
+      if (modelMenuRef.current && !modelMenuRef.current.contains(e.target as Node)) {
+        setModelMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setModelMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [modelMenuOpen]);
 
   // Live batch progress
   const [runningJob, setRunningJob] = useState(false);
@@ -900,51 +924,100 @@ export const BenchmarkWorkspace: React.FC<BenchmarkWorkspaceProps> = ({
             {/* Bottom Sticky Run Configuration Bar */}
             <div className="glass-surface shrink-0 rounded-2xl p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] font-semibold text-slate-600">评测模型：</span>
-                  {modelChoices.map((m) => {
-                    const checked = runModels.includes(m);
-                    return (
-                      <button
-                        key={m}
-                        type="button"
-                        disabled={runningJob}
-                        onClick={() => handleToggleModel(m)}
-                        className={`rounded-xl border px-2 py-1 text-[11px] font-medium transition-all ${
-                          checked
-                            ? "border-cyan-600 bg-cyan-700 text-white"
-                            : "border-slate-200 bg-white/85 text-slate-700 hover:bg-white"
-                        }`}
-                      >
-                        {m}
-                      </button>
-                    );
-                  })}
-
-                  <div className="flex items-center gap-1">
-                    <input
-                      type="text"
-                      value={customModelInput}
-                      disabled={runningJob}
-                      onChange={(e) => setCustomModelInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          handleAddCustomModel();
-                        }
-                      }}
-                      placeholder="自定义模型 ID"
-                      className="w-32 rounded-xl border border-slate-200 bg-white/90 px-2 py-1 text-[11px] text-slate-800 focus:border-cyan-600 focus:outline-none"
-                    />
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="shrink-0 text-[11px] font-semibold text-slate-600">
+                    评测模型：
+                  </span>
+                  <div ref={modelMenuRef} className="relative">
                     <button
                       type="button"
+                      data-testid="batch-model-selector"
                       disabled={runningJob}
-                      onClick={handleAddCustomModel}
-                      className="rounded-xl border border-slate-200 bg-white/90 p-1 text-slate-600 hover:bg-white"
-                      title="添加模型"
+                      title={
+                        runModels.length > 0 ? runModels.join(", ") : "请选择至少一个评测模型"
+                      }
+                      onClick={() => setModelMenuOpen((prev) => !prev)}
+                      className="inline-flex max-w-[230px] items-center justify-between gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <Plus className="h-3.5 w-3.5" />
+                      <span className="truncate">
+                        {runModels.length === 0
+                          ? "选择评测模型"
+                          : runModels.length === 1
+                            ? runModels[0]
+                            : `${runModels[0]} +${runModels.length - 1}`}
+                      </span>
+                      <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
                     </button>
+
+                    {modelMenuOpen && !runningJob && (
+                      <div className="absolute bottom-full left-0 z-30 mb-2 w-72 rounded-2xl border border-slate-200/90 bg-white/95 p-2.5 shadow-xl backdrop-blur-md">
+                        <div className="mb-1.5 flex items-center justify-between px-1 text-[11px]">
+                          <span className="font-semibold text-slate-700">
+                            已选 {runModels.length} 个模型
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setModelMenuOpen(false)}
+                            className="rounded-lg px-2 py-0.5 font-semibold text-cyan-700 hover:bg-cyan-50"
+                          >
+                            完成
+                          </button>
+                        </div>
+
+                        <div className="max-h-56 space-y-1 overflow-y-auto pr-0.5">
+                          {modelChoices.map((m) => {
+                            const checked = runModels.includes(m);
+                            return (
+                              <button
+                                key={m}
+                                type="button"
+                                onClick={() => handleToggleModel(m)}
+                                className={`flex w-full items-center justify-between gap-2 rounded-xl px-2.5 py-1.5 text-left font-mono text-[11px] transition ${
+                                  checked
+                                    ? "bg-cyan-50 font-semibold text-cyan-900"
+                                    : "text-slate-700 hover:bg-slate-100/80"
+                                }`}
+                              >
+                                <span className="truncate">{m}</span>
+                                <span
+                                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                    checked
+                                      ? "border-cyan-600 bg-cyan-600 text-white"
+                                      : "border-slate-300 bg-white"
+                                  }`}
+                                >
+                                  {checked && <Check className="h-3 w-3" />}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <div className="mt-2 flex items-center gap-1.5 border-t border-slate-100 pt-2">
+                          <input
+                            type="text"
+                            value={customModelInput}
+                            onChange={(e) => setCustomModelInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                handleAddCustomModel();
+                              }
+                            }}
+                            placeholder="添加自定义模型 ID..."
+                            className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] text-slate-800 placeholder:font-sans placeholder:text-slate-400 focus:border-cyan-600 focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleAddCustomModel}
+                            className="rounded-xl border border-slate-200 bg-white p-1.5 text-slate-600 hover:bg-slate-50"
+                            title="添加模型"
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
