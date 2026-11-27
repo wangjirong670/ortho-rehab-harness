@@ -4,16 +4,16 @@
 
 ---
 
-## 一、项目定位与 `v0.3.0` 架构分层
+## 一、项目定位与 `v0.4.0` 架构分层
 
-`OrthoRehab-TCM-Harness` 是面向**中医骨伤科与康复科**的共生双端确定性临床护栏系统，自 `v0.3.0` 起采用前后端分离单窗口原生桌面架构（**Single Source of Truth**）：
+`OrthoRehab-TCM-Harness` 是面向**中医骨伤科与康复科**的共生双端确定性临床护栏系统，采用前后端分离单窗口原生桌面架构（**Single Source of Truth**）：
 
 ```text
-knowledge_base/*.yaml (16 条红旗 / 11 组用药冲突 / 4 套骨伤量表)
+knowledge_base/*.yaml (16 条红旗 / 11 组用药冲突 / 4 套骨伤量表 / 6 个权威检索源)
         +
-core_tools/ (schemas / calculator / rule_scanner / llm_client)
-        ├──▶ app_copilot/service.py  (临床副驾编排 + 输出确定性复检)
-        └──▶ app_benchmark/service.py & runner.py & evaluator.py (红队 20 题评测)
+core_tools/ (schemas / calculator / rule_scanner / llm_client / model_capabilities / web_search / harness_core)
+        ├──▶ app_copilot/ (service / prompts / patient_store / session_store — PATIENT.md + .trace.jsonl)
+        └──▶ app_benchmark/service.py & runner.py & evaluator.py (批量 20 题 + 自由红队对比评测)
                 └──▶ backend/ (FastAPI REST & SSE)
                         └──▶ frontend/ (React + Vite + Tailwind 玻璃态 SPA)
                                 └──▶ desktop_app.py (PyWebView 原生单窗口主入口)
@@ -75,5 +75,5 @@ core_tools/ (schemas / calculator / rule_scanner / llm_client)
 
 # 5. 构建前端 SPA 并打包本地 Windows 绿色版
 cd frontend ; npm ci ; if ($LASTEXITCODE -eq 0) { npm run build } ; cd ..
-.\.venv\Scripts\python.exe packaging/build_release.py --version v0.3.0
+.\.venv\Scripts\python.exe packaging/build_release.py --version v0.4.0
 ```
