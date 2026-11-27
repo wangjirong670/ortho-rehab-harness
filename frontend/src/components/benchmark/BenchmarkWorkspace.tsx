@@ -118,10 +118,10 @@ export const BenchmarkWorkspace: React.FC<BenchmarkWorkspaceProps> = ({
   const [selectedCaseKey, setSelectedCaseKey] = useState<string>("");
   const [drawerOpen, setDrawerOpen] = useState(true);
 
-  // Batch run configuration bar
+  // Batch run configuration bar (strict single-select)
   const [runModels, setRunModels] = useState<string[]>(() => {
-    if (defaultBenchmarkModels.length > 0) return defaultBenchmarkModels;
-    return defaultModel ? [defaultModel] : ["deepseek/deepseek-chat"];
+    const first = defaultBenchmarkModels[0] || defaultModel || "deepseek/deepseek-chat";
+    return [first];
   });
   const [modelThinking, setModelThinking] = useState<Record<string, ThinkingLevel>>({});
   const [runModes, setRunModes] = useState<Array<"bare_llm" | "harness_copilot">>([
@@ -901,16 +901,18 @@ export const BenchmarkWorkspace: React.FC<BenchmarkWorkspaceProps> = ({
                     评测模型：
                   </span>
                   <ModelThinkingPicker
-                    mode="multi"
+                    mode="single"
                     direction="up"
                     testId="batch-model-selector"
                     availableModels={modelChoices}
-                    selectedModels={runModels}
+                    selectedModels={runModels.slice(0, 1)}
                     modelCapabilities={modelCapabilities}
                     modelThinking={modelThinking}
                     mockMode={runMockMode}
                     disabled={runningJob}
-                    onChangeModels={setRunModels}
+                    onChangeModels={(next) => {
+                      if (next[0]) setRunModels([next[0]]);
+                    }}
                     onChangeThinking={(m, level) =>
                       setModelThinking((prev) => ({ ...prev, [m]: level }))
                     }

@@ -18,7 +18,7 @@ const THINKING_LABEL_MAP: Record<ThinkingLevel, string> = {
 };
 
 interface ModelThinkingPickerProps {
-  mode: "single" | "multi";
+  mode?: "single";
   direction?: "up" | "down";
   availableModels: string[];
   selectedModels: string[];
@@ -33,7 +33,6 @@ interface ModelThinkingPickerProps {
 }
 
 export const ModelThinkingPicker: React.FC<ModelThinkingPickerProps> = ({
-  mode,
   direction = "up",
   availableModels,
   selectedModels,
@@ -113,48 +112,23 @@ export const ModelThinkingPicker: React.FC<ModelThinkingPickerProps> = ({
   };
 
   const handleToggleSelectModel = (model: string) => {
-    if (mode === "single") {
-      onChangeModels([model]);
-      setExpandedModel(model);
-      return;
-    }
-    const exists = selectedModels.includes(model);
-    const next = exists
-      ? selectedModels.filter((item) => item !== model)
-      : [...selectedModels, model];
-    onChangeModels(next);
-    if (!exists) {
-      setExpandedModel(model);
-    } else if (expandedModel === model) {
-      setExpandedModel(null);
-    }
+    onChangeModels([model]);
+    setExpandedModel(model);
   };
 
   const handleAddCustomModel = () => {
     const trimmed = customModelInput.trim();
     if (!trimmed) return;
     setCustomModels((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
-    if (mode === "single") {
-      onChangeModels([trimmed]);
-    } else if (!selectedModels.includes(trimmed)) {
-      onChangeModels([...selectedModels, trimmed]);
-    }
+    onChangeModels([trimmed]);
     setExpandedModel(trimmed);
     setCustomModelInput("");
   };
 
   const primaryModel = selectedModels[0] || "";
   const primaryLevel = primaryModel ? getEffectiveLevel(primaryModel) : "off";
-  const activeThinkingCount = selectedModels.filter(
-    (m) => getEffectiveLevel(m) !== "off"
-  ).length;
 
-  const triggerText =
-    selectedModels.length === 0
-      ? "选择模型"
-      : mode === "single" || selectedModels.length === 1
-        ? primaryModel
-        : `${primaryModel} +${selectedModels.length - 1}`;
+  const triggerText = primaryModel || "选择模型";
 
   return (
     <div ref={containerRef} className="relative inline-block">
@@ -165,24 +139,25 @@ export const ModelThinkingPicker: React.FC<ModelThinkingPickerProps> = ({
         title={
           disabled && disabledTooltip
             ? disabledTooltip
-            : selectedModels.length > 0
-              ? selectedModels.join(", ")
+            : primaryModel
+              ? `${primaryModel}（思考：${THINKING_LABEL_MAP[primaryLevel]}）`
               : "选择模型并展开配置思考强度"
         }
         onClick={() => !disabled && setOpen((prev) => !prev)}
         className="inline-flex max-w-[280px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
       >
         <span className="truncate">{triggerText}</span>
-        {mode === "single" && primaryModel && primaryLevel !== "off" && (
-          <span className="inline-flex shrink-0 items-center gap-0.5 rounded-md bg-cyan-50 px-1.5 py-0.5 font-sans text-[10px] font-semibold text-cyan-800">
+        {primaryModel && (
+          <span
+            data-testid={`${testId}-thinking-pill`}
+            className={`inline-flex shrink-0 items-center gap-0.5 rounded-md px-1.5 py-0.5 font-sans text-[10px] font-semibold ${
+              primaryLevel !== "off"
+                ? "bg-cyan-50 text-cyan-800"
+                : "bg-slate-100 text-slate-500"
+            }`}
+          >
             <Brain className="h-2.5 w-2.5" />
             {THINKING_LABEL_MAP[primaryLevel]}
-          </span>
-        )}
-        {mode === "multi" && activeThinkingCount > 0 && (
-          <span className="inline-flex shrink-0 items-center gap-0.5 rounded-md bg-cyan-50 px-1.5 py-0.5 font-sans text-[10px] font-semibold text-cyan-800">
-            <Brain className="h-2.5 w-2.5" />
-            {activeThinkingCount}
           </span>
         )}
         <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
@@ -196,9 +171,7 @@ export const ModelThinkingPicker: React.FC<ModelThinkingPickerProps> = ({
         >
           <div className="mb-1.5 flex items-center justify-between px-1 text-[11px]">
             <span className="font-semibold text-slate-700">
-              {mode === "multi"
-                ? `已选 ${selectedModels.length} 个模型（选中后右侧可展开调思考）`
-                : "选择模型（右侧可展开配置思考等级）"}
+              选择模型（右侧可展开配置思考等级）
             </span>
             <button
               type="button"
@@ -237,9 +210,7 @@ export const ModelThinkingPicker: React.FC<ModelThinkingPickerProps> = ({
                       className="flex min-w-0 flex-1 items-center gap-2 text-left"
                     >
                       <span
-                        className={`flex h-4 w-4 shrink-0 items-center justify-center border ${
-                          mode === "single" ? "rounded-full" : "rounded"
-                        } ${
+                        className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
                           isSelected
                             ? "border-cyan-600 bg-cyan-600 text-white"
                             : "border-slate-300 bg-white"
