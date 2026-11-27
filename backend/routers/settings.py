@@ -7,12 +7,13 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 import launcher
 from app_copilot.service import PRESET_MODELS
 from core_tools.llm_client import LLMConfig, _resolve_env_file, probe_ollama_models
+from core_tools.model_capabilities import get_model_capabilities, list_model_capabilities
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -75,6 +76,7 @@ def _build_llm_settings_payload() -> Dict[str, Any]:
             }
         )
 
+    all_known_models = list(dict.fromkeys([cfg.default_model, *preset_models]))
     return {
         "copilot_default_model": cfg.default_model,
         "benchmark_models": os.getenv(
@@ -83,6 +85,7 @@ def _build_llm_settings_payload() -> Dict[str, Any]:
         ),
         "llm_mock_mode": bool(cfg.mock_mode),
         "preset_models": preset_models,
+        "model_capabilities": list_model_capabilities(all_known_models),
         "providers": providers,
         "ollama_models": ollama_models,
         "compliance_notice": launcher.COMPLIANCE_NOTICE,
@@ -186,3 +189,8 @@ def list_ollama_models() -> Dict[str, Any]:
         "models": models,
         "reachable": bool(ok),
     }
+
+
+@router.get("/model-capabilities")
+def get_single_model_capability(model: str = Query(..., min_length=1)) -> Dict[str, Any]:
+    return get_model_capabilities(model)

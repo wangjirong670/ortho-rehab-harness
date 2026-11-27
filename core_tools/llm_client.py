@@ -24,6 +24,11 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ValidationError
 
 from core_tools.calculator import load_scales_catalog
+from core_tools.model_capabilities import (
+    build_reasoning_kwargs,
+    get_model_capabilities,
+    normalize_thinking_level,
+)
 from core_tools.rule_scanner import (
     _extract_clause_windows,
     check_negation_context,
@@ -366,6 +371,34 @@ def _strip_thinking_blocks(raw_text: str) -> str:
     stripped = re.sub(r"<think>[\s\S]*?</think>", "", raw_text, flags=re.IGNORECASE)
     stripped = re.sub(r"<reasoning>[\s\S]*?</reasoning>", "", stripped, flags=re.IGNORECASE)
     return stripped.strip()
+
+
+def extract_reasoning_and_content(raw_content: str, message_obj: Any = None) -> Tuple[str, str]:
+    """Preserve provider reasoning_content and <think>/<reasoning> blocks alongside cleaned final content."""
+    text = str(raw_content or "")
+    reasoning_parts: List[str] = []
+
+    if message_obj is not None:
+        direct_rc = getattr(message_obj, "reasoning_content", None)
+        if not direct_rc and isinstance(message_obj, dict):
+            direct_rc = message_obj.get("reasoning_content")
+        if not direct_rc:
+            psf = getattr(message_obj, "provider_specific_fields", None)
+            if isinstance(psf, dict):
+                direct_rc = psf.get("reasoning_content") or psf.get("thinking")
+        if direct_rc and str(direct_rc).strip():
+            reasoning_parts.append(str(direct_rc).strip())
+
+    for pat in (r"<think>([\s\S]*?)</think>", r"<reasoning>([\s\S]*?)</reasoning>"):
+        for m in re.finditer(pat, text, flags=re.IGNORECASE):
+            blk = (m.group(1) or "").strip()
+            if blk and blk not in reasoning_parts:
+                reasoning_parts.append(blk)
+
+    clean_content = _strip_thinking_blocks(text)
+    if not clean_content and text.strip():
+        clean_content = text.strip()
+    return clean_content, "\n\n".join(reasoning_parts).strip()
 
 
 def _extract_json_candidates(raw_text: str) -> List[str]:
@@ -1795,6 +1828,7 @@ class LLMClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         response_format: Optional[Dict[str, Any]] = None,
+        thinking: str = "off",
         mock_mode: Optional[bool] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
@@ -1804,9 +1838,21 @@ class LLMClient:
 
         if use_mock:
             content = _mock_chat_reply(messages)
+            cap = get_model_capabilities(chosen_model)
+            norm_level = normalize_thinking_level(thinking)
+            mock_reasoning = ""
+            if cap.get("supports_thinking") and (
+                norm_level != "off" or cap.get("mechanism") == "always_on"
+            ):
+                mock_reasoning = (
+                    f"[Mock L3 推理 | 模型 {chosen_model} | 强度={norm_level}]\n"
+                    "1. 先核对确定性安全引擎传入的红旗规则、用药洗脱期与量表分数边界。\n"
+                    "2. 确认所有高危禁忌均以“严禁/切勿”前置明示，避免越权推荐风险手法或叠加用药。"
+                )
             return {
                 "status": "ok",
                 "content": content,
+                "reasoning": mock_reasoning,
                 "model": f"mock/{chosen_model}",
                 "mock": True,
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
@@ -1821,6 +1867,7 @@ class LLMClient:
                 "error_code": "LITELLM_NOT_INSTALLED",
                 "message": "未安装 litellm。请运行 `pip install litellm` 安装，或在 .env 中设置 LLM_MOCK_MODE=true 使用本地 Mock 模式。",
                 "content": "",
+                "reasoning": "",
                 "model": chosen_model,
                 "mock": False,
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
@@ -1839,22 +1886,33 @@ class LLMClient:
         if response_format is not None:
             call_kwargs["response_format"] = response_format
 
+        reasoning_kwargs = build_reasoning_kwargs(chosen_model, thinking)
         extra_kwargs = dict(kwargs)
         resolved_api_base = _resolve_api_base(chosen_model, self.config.api_base, extra_kwargs)
         extra_kwargs.pop("api_base", None)
+
+        if "extra_body" in reasoning_kwargs and isinstance(extra_kwargs.get("extra_body"), dict):
+            merged_body = dict(reasoning_kwargs["extra_body"])
+            merged_body.update(extra_kwargs.pop("extra_body"))
+            reasoning_kwargs["extra_body"] = merged_body
+
+        call_kwargs.update(reasoning_kwargs)
         call_kwargs.update(extra_kwargs)
         if resolved_api_base:
             call_kwargs["api_base"] = resolved_api_base
 
         try:
             response = litellm.completion(**call_kwargs)
-            content = response.choices[0].message.content or ""
+            msg_obj = response.choices[0].message
+            raw_content = getattr(msg_obj, "content", None) or ""
+            content, reasoning_text = extract_reasoning_and_content(raw_content, msg_obj)
         except Exception as exc:
             return {
                 "status": "error",
                 "error_code": "LLM_CALL_ERROR",
                 "message": _sanitize_error_message(f"{type(exc).__name__}: {exc}"),
                 "content": "",
+                "reasoning": "",
                 "model": chosen_model,
                 "mock": False,
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
@@ -1870,6 +1928,7 @@ class LLMClient:
         return {
             "status": "ok",
             "content": content,
+            "reasoning": reasoning_text,
             "model": chosen_model,
             "mock": False,
             "usage": usage,

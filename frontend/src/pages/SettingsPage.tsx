@@ -676,6 +676,61 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
               </button>
             </div>
           </section>
+
+          {/* Model Thinking Capabilities Matrix (D19) */}
+          {settings?.model_capabilities &&
+            Object.keys(settings.model_capabilities).length > 0 && (
+              <section className="glass-surface space-y-3 rounded-3xl p-5">
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-sm font-bold text-slate-900">
+                    模型思考强度能力表（只读探测映射）
+                  </h2>
+                  <span className="text-[11px] text-slate-500">
+                    自动将「关 / 低 / 中 / 高」映射为各厂商原生推理参数
+                  </span>
+                </div>
+                <div className="clinical-paper overflow-x-auto rounded-2xl p-3">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-[11px] text-slate-500">
+                        <th className="px-2 py-1.5">模型标识</th>
+                        <th className="px-2 py-1.5">支持思考</th>
+                        <th className="px-2 py-1.5">协议机制</th>
+                        <th className="px-2 py-1.5">可用档位</th>
+                        <th className="px-2 py-1.5">说明</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {Object.values(settings.model_capabilities).map((cap) => (
+                        <tr key={cap.model}>
+                          <td className="px-2 py-2 font-mono text-[11px] font-semibold text-slate-800">
+                            {cap.model}
+                          </td>
+                          <td className="px-2 py-2">
+                            <span
+                              className={`inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                cap.supports_thinking
+                                  ? "bg-emerald-100 text-emerald-800"
+                                  : "bg-slate-100 text-slate-500"
+                              }`}
+                            >
+                              {cap.supports_thinking ? "支持" : "不支持"}
+                            </span>
+                          </td>
+                          <td className="px-2 py-2 font-mono text-[11px] text-slate-600">
+                            {cap.mechanism}
+                          </td>
+                          <td className="px-2 py-2 text-[11px] text-slate-700">
+                            {cap.supported_levels.join(" / ")}
+                          </td>
+                          <td className="px-2 py-2 text-[11px] text-slate-500">{cap.note}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
         </div>
       )}
 

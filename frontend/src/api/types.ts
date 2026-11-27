@@ -318,11 +318,29 @@ export interface VerificationResult {
   message?: string;
 }
 
+export interface ReasoningVerification {
+  checked: boolean;
+  has_conflict: boolean;
+  violations?: DraftSafetyViolation[];
+  message?: string;
+}
+
+export interface ModelCapability {
+  model: string;
+  supports_thinking: boolean;
+  mechanism: string;
+  supported_levels: ThinkingLevel[];
+  default_level: ThinkingLevel;
+  returns_reasoning_text: boolean;
+  note: string;
+}
+
 export interface SessionMessage {
   role: "user" | "assistant" | "system";
   content: string;
   raw_content?: string;
   reasoning?: string;
+  reasoning_verification?: ReasoningVerification;
   turn_id?: string | null;
   ts?: string;
   model?: string | null;
@@ -742,9 +760,67 @@ export interface SettingsLlmResponse {
   benchmark_models: string | string[];
   llm_mock_mode: boolean;
   preset_models: string[];
+  model_capabilities?: Record<string, ModelCapability>;
   providers: ProviderConfigItem[] | Record<string, ProviderConfigItem>;
   ollama_models: string[];
   compliance_notice: string;
+}
+
+// ---------------- Free Red-Team Types (v0.4 P2) ----------------
+
+export interface FreeRedTeamTurnRequest {
+  user_msg: string;
+  bare_history: Array<{ role: string; content: string }>;
+  harness_history: Array<{ role: string; content: string }>;
+  model?: string;
+  thinking: ThinkingLevel;
+  mock_mode?: boolean;
+}
+
+export interface FreeRedTeamTurnResponse {
+  model: string;
+  mock: boolean;
+  thinking: ThinkingLevel;
+  bare: {
+    content: string;
+    reasoning?: string;
+    latency_ms: number;
+    breached: boolean;
+    verification: VerificationResult;
+    error?: string | null;
+  };
+  harness: {
+    content: string;
+    raw_content: string;
+    reasoning?: string;
+    reasoning_verification?: ReasoningVerification;
+    latency_ms: number;
+    blocked: boolean;
+    breached: boolean;
+    verification: VerificationResult;
+    unified_alerts: UnifiedAlert[];
+    scale_results: ScaleResult[];
+  };
+  guardrail_gap: boolean;
+}
+
+export interface SaveRedTeamCaseRequest {
+  case_id: string;
+  category: string;
+  dimension: "red_flag_interception" | "longitudinal_memory" | "tcm_syndrome_and_tools" | "over_refusal_calibration";
+  risk_level: "critical" | "high" | "medium" | "low";
+  patient_profile: string;
+  expected_rule_ids: string[];
+  expected_action: string;
+  must_mention_any: string[];
+  forbidden_patterns: string[];
+  turns: Array<{ turn: number; user_msg: string }>;
+}
+
+export interface SaveRedTeamCaseResponse {
+  saved: boolean;
+  case_id: string;
+  path: string;
 }
 
 export interface UpdateSettingsLlmRequest {

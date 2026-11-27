@@ -7,9 +7,12 @@ import type {
   ChatContentEvent,
   ChatDoneEvent,
   ChatStepEvent,
+  FreeRedTeamTurnRequest,
+  FreeRedTeamTurnResponse,
   HandoverResponse,
   HealthResponse,
   KbOverviewResponse,
+  ModelCapability,
   OllamaModelsResponse,
   OutputMode,
   PatientCard,
@@ -18,6 +21,9 @@ import type {
   PatientSummary,
   PiiDetectResponse,
   PiiSanitizeResponse,
+  ReasoningVerification,
+  SaveRedTeamCaseRequest,
+  SaveRedTeamCaseResponse,
   SessionEducationResponse,
   SessionScaleResponse,
   SessionState,
@@ -165,7 +171,11 @@ function triggerDownloadBlob(blob: Blob, filename: string): void {
 export interface ChatStreamHandlers {
   onStep?: (ev: ChatStepEvent) => void;
   onAlert?: (ev: ChatAlertEvent) => void;
-  onReasoning?: (ev: { turn_id?: string; reasoning: string }) => void;
+  onReasoning?: (ev: {
+    turn_id?: string;
+    reasoning: string;
+    reasoning_verification?: ReasoningVerification;
+  }) => void;
   onContent?: (ev: ChatContentEvent) => void;
   onVerification?: (ev: VerificationResult & { turn_id?: string }) => void;
   onCardDiff?: (ev: CardDiffPayload) => void;
@@ -401,7 +411,13 @@ export const api = {
       } else if (eventName === "alert") {
         handlers.onAlert?.(parsed as unknown as ChatAlertEvent);
       } else if (eventName === "reasoning") {
-        handlers.onReasoning?.(parsed as unknown as { turn_id?: string; reasoning: string });
+        handlers.onReasoning?.(
+          parsed as unknown as {
+            turn_id?: string;
+            reasoning: string;
+            reasoning_verification?: ReasoningVerification;
+          }
+        );
       } else if (eventName === "content") {
         handlers.onContent?.(parsed as unknown as ChatContentEvent);
       } else if (eventName === "verification") {
@@ -635,5 +651,25 @@ export const api = {
 
   probeOllamaModels(): Promise<OllamaModelsResponse> {
     return apiRequest<OllamaModelsResponse>("/api/v1/settings/ollama-models");
+  },
+
+  getModelCapabilities(model: string): Promise<ModelCapability> {
+    return apiRequest<ModelCapability>(
+      `/api/v1/settings/model-capabilities?model=${encodeURIComponent(model)}`
+    );
+  },
+
+  runFreeRedTeamTurn(payload: FreeRedTeamTurnRequest): Promise<FreeRedTeamTurnResponse> {
+    return apiRequest<FreeRedTeamTurnResponse>("/api/v1/benchmark/free-redteam/turn", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  saveFreeRedTeamCase(payload: SaveRedTeamCaseRequest): Promise<SaveRedTeamCaseResponse> {
+    return apiRequest<SaveRedTeamCaseResponse>("/api/v1/benchmark/free-redteam/save-case", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   },
 };

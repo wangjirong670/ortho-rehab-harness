@@ -9,6 +9,7 @@ import { api } from "../../api/client";
 import type {
   CardDiffPayload,
   ChatStepEvent,
+  ModelCapability,
   OutputMode,
   PatientDetailResponse,
   PatientSummary,
@@ -29,6 +30,7 @@ import { DrawerTab, SessionDrawer } from "./SessionDrawer";
 interface CopilotWorkspaceProps {
   availableModels: string[];
   defaultModel: string;
+  modelCapabilities?: Record<string, ModelCapability>;
   mockMode: boolean;
   scalesCatalog: ScaleSpec[];
   defaultExpandSteps?: boolean;
@@ -39,6 +41,7 @@ interface CopilotWorkspaceProps {
 export const CopilotWorkspace: React.FC<CopilotWorkspaceProps> = ({
   availableModels,
   defaultModel,
+  modelCapabilities = {},
   mockMode,
   scalesCatalog,
   defaultExpandSteps = false,
@@ -634,6 +637,7 @@ export const CopilotWorkspace: React.FC<CopilotWorkspaceProps> = ({
             <Composer
               availableModels={availableModels}
               defaultModel={defaultModel}
+              modelCapabilities={modelCapabilities}
               mockMode={mockMode}
               streaming={streaming}
               onSend={handleSendChat}

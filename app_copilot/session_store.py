@@ -315,6 +315,10 @@ def replay_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "content": content,
                 "raw_content": raw_content,
                 "reasoning": str(payload.get("reasoning") or ""),
+                "reasoning_verification": copy.deepcopy(
+                    payload.get("reasoning_verification")
+                    or {"checked": False, "has_conflict": False, "violations": [], "message": ""}
+                ),
                 "turn_id": turn_id,
                 "ts": ts,
                 "model": payload.get("model"),

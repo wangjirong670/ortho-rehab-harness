@@ -8,7 +8,7 @@ import type {
 import { GlassShell } from "./components/GlassShell";
 import { WorkspaceMode } from "./components/ModeCapsule";
 import { CopilotWorkspace } from "./components/copilot/CopilotWorkspace";
-import { BenchmarkPage } from "./pages/BenchmarkPage";
+import { BenchmarkWorkspace } from "./components/benchmark/BenchmarkWorkspace";
 import { SettingsPage } from "./pages/SettingsPage";
 
 function loadDefaultExpandSteps(): boolean {
@@ -98,14 +98,10 @@ export const App: React.FC = () => {
       onSelectWorkspaceMode={(mode) => {
         setSettingsOpen(false);
         setWorkspaceMode(mode);
-        if (mode !== "copilot") {
-          setSidebarSlot(null);
-          setHeaderActions(null);
-        }
       }}
       onOpenSettings={() => setSettingsOpen(true)}
-      sidebarSlot={workspaceMode === "copilot" ? sidebarSlot : null}
-      headerActions={workspaceMode === "copilot" ? headerActions : null}
+      sidebarSlot={!settingsOpen ? sidebarSlot : null}
+      headerActions={!settingsOpen ? headerActions : null}
       health={health}
       healthLoading={healthLoading}
       healthError={healthError}
@@ -130,6 +126,7 @@ export const App: React.FC = () => {
         <CopilotWorkspace
           availableModels={availableModels}
           defaultModel={activeModel}
+          modelCapabilities={settings?.model_capabilities || {}}
           mockMode={mockMode}
           scalesCatalog={scalesList}
           defaultExpandSteps={defaultExpandSteps}
@@ -137,11 +134,14 @@ export const App: React.FC = () => {
           onRenderHeaderActions={setHeaderActions}
         />
       ) : (
-        <BenchmarkPage
-          presetModels={settings?.preset_models || []}
-          ollamaModels={settings?.ollama_models || []}
+        <BenchmarkWorkspace
+          availableModels={availableModels}
+          defaultModel={activeModel}
+          modelCapabilities={settings?.model_capabilities || {}}
           defaultBenchmarkModels={defaultBenchmarkList}
           defaultMockMode={mockMode}
+          onRenderSidebarSlot={setSidebarSlot}
+          onRenderHeaderActions={setHeaderActions}
         />
       )}
     </GlassShell>

@@ -10,12 +10,18 @@ import {
   Undo2,
 } from "lucide-react";
 import { api } from "../../api/client";
-import type { OutputMode, PiiFinding, ThinkingLevel } from "../../api/types";
+import type {
+  ModelCapability,
+  OutputMode,
+  PiiFinding,
+  ThinkingLevel,
+} from "../../api/types";
 import { Modal } from "../Modal";
 
 interface ComposerProps {
   availableModels: string[];
   defaultModel: string;
+  modelCapabilities?: Record<string, ModelCapability>;
   mockMode: boolean;
   disabled?: boolean;
   streaming: boolean;
@@ -28,6 +34,13 @@ interface ComposerProps {
   }) => Promise<void>;
 }
 
+const THINKING_LEVEL_LABELS: Array<{ key: ThinkingLevel; label: string }> = [
+  { key: "off", label: "关" },
+  { key: "low", label: "低" },
+  { key: "medium", label: "中" },
+  { key: "high", label: "高" },
+];
+
 function isLocalOrMockModel(model: string, mockMode: boolean): boolean {
   if (mockMode) return true;
   const lower = (model || "").toLowerCase();
@@ -37,6 +50,7 @@ function isLocalOrMockModel(model: string, mockMode: boolean): boolean {
 export const Composer: React.FC<ComposerProps> = ({
   availableModels,
   defaultModel,
+  modelCapabilities = {},
   mockMode,
   disabled = false,
   streaming,
@@ -44,8 +58,9 @@ export const Composer: React.FC<ComposerProps> = ({
 }) => {
   const [text, setText] = useState("");
   const [selectedModel, setSelectedModel] = useState(defaultModel || availableModels[0] || "");
-  const [thinking] = useState<ThinkingLevel>("off");
+  const [thinking, setThinking] = useState<ThinkingLevel>("off");
   const [outputMode, setOutputMode] = useState<OutputMode>("full");
+  const [dynamicCaps, setDynamicCaps] = useState<Record<string, ModelCapability>>({});
 
   const [piiFindings, setPiiFindings] = useState<PiiFinding[]>([]);
   const [piiDismissed, setPiiDismissed] = useState(false);
@@ -61,6 +76,32 @@ export const Composer: React.FC<ComposerProps> = ({
       setSelectedModel(defaultModel);
     }
   }, [defaultModel, selectedModel]);
+
+  const activeCap: ModelCapability | undefined =
+    modelCapabilities[selectedModel] || dynamicCaps[selectedModel];
+
+  useEffect(() => {
+    if (!selectedModel || modelCapabilities[selectedModel] || dynamicCaps[selectedModel]) {
+      return;
+    }
+    api
+      .getModelCapabilities(selectedModel)
+      .then((cap) => {
+        setDynamicCaps((prev) => ({ ...prev, [selectedModel]: cap }));
+      })
+      .catch(() => {
+        // non-fatal
+      });
+  }, [dynamicCaps, modelCapabilities, selectedModel]);
+
+  useEffect(() => {
+    if (!activeCap) return;
+    if (!activeCap.supports_thinking) {
+      setThinking("off");
+    } else if (!activeCap.supported_levels.includes(thinking)) {
+      setThinking(activeCap.default_level || activeCap.supported_levels[0] || "off");
+    }
+  }, [activeCap, thinking]);
 
   // Debounced live PII check
   useEffect(() => {
@@ -314,16 +355,49 @@ export const Composer: React.FC<ComposerProps> = ({
               ))}
             </select>
 
-            {/* P1 placeholder disabled thinking selector (activated in P2 D19) */}
-            <div
-              title="思考强度能力表（关/低/中/高）将在 P2 接入模型能力探测"
-              className="inline-flex items-center gap-1 rounded-xl border border-slate-200/80 bg-slate-100/80 px-2 py-1 text-[10px] text-slate-400"
-            >
-              <span>思考</span>
-              <span className="rounded bg-white/80 px-1.5 py-0.5 font-semibold text-slate-400">
-                关
-              </span>
-            </div>
+            {/* Live Capability-Driven Thinking Intensity Selector (D19) */}
+            {(() => {
+              const thinkingSupported = Boolean(activeCap?.supports_thinking) && !controlsGreyed;
+              const allowed = activeCap?.supported_levels || ["off"];
+              const tooltip = controlsGreyed
+                ? "简要筛查为纯确定性引擎，思考调节已置灰"
+                : activeCap?.note || "思考强度调节（关/低/中/高）";
+              return (
+                <div
+                  data-testid="thinking-selector"
+                  title={tooltip}
+                  className={`inline-flex items-center gap-0.5 rounded-xl border p-0.5 text-[11px] ${
+                    thinkingSupported
+                      ? "border-slate-200 bg-slate-100/80"
+                      : "cursor-not-allowed border-slate-200/70 bg-slate-100/70 opacity-60"
+                  }`}
+                >
+                  <span className="px-1.5 text-[10px] font-medium text-slate-500">思考</span>
+                  {THINKING_LEVEL_LABELS.map((item) => {
+                    const levelAllowed = thinkingSupported && allowed.includes(item.key);
+                    const active = thinking === item.key;
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        disabled={!levelAllowed}
+                        data-testid={`thinking-level-${item.key}`}
+                        onClick={() => levelAllowed && setThinking(item.key)}
+                        className={`rounded-lg px-2 py-0.5 font-semibold transition ${
+                          active && thinkingSupported
+                            ? "bg-white text-cyan-800 shadow-sm"
+                            : levelAllowed
+                              ? "text-slate-600 hover:text-slate-900"
+                              : "cursor-not-allowed text-slate-400"
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
 
           <div className="flex items-center gap-1.5">

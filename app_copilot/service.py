@@ -45,12 +45,14 @@ from core_tools.rule_scanner import (
 
 PRESET_MODELS: List[str] = [
     "deepseek/deepseek-chat",
+    "deepseek/deepseek-reasoner",
     "dashscope/qwen-plus",
     "openai/gpt-4o-mini",
+    "openai/o3-mini",
     "ollama_chat/qwen2.5:7b",
     "zai/glm-4-plus",
     "moonshot/moonshot-v1-8k",
-    "anthropic/claude-3-5-sonnet-latest",
+    "anthropic/claude-3-7-sonnet-20250219",
     "gemini/gemini-2.5-pro",
 ]
 

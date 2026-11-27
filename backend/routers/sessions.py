@@ -244,6 +244,7 @@ def chat_in_session(patient_id: str, session_id: str, req: ChatTurnRequest) -> S
                     "content": result.content,
                     "raw_content": result.raw_content,
                     "reasoning": result.reasoning,
+                    "reasoning_verification": result.reasoning_verification,
                     "model": result.model,
                     "mock": result.mock,
                     "output_mode": result.output_mode,
@@ -284,7 +285,11 @@ def chat_in_session(patient_id: str, session_id: str, req: ChatTurnRequest) -> S
                 event_queue.put(
                     {
                         "event": "reasoning",
-                        "data": {"turn_id": turn_id, "reasoning": result.reasoning},
+                        "data": {
+                            "turn_id": turn_id,
+                            "reasoning": result.reasoning,
+                            "reasoning_verification": result.reasoning_verification,
+                        },
                     }
                 )
 

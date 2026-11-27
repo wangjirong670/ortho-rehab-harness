@@ -23,7 +23,8 @@ from app_copilot.prompts import (
     build_extraction_messages,
 )
 from core_tools.calculator import calculate_joa_improvement_rate, calculate_scale
-from core_tools.llm_client import LLMClient
+from core_tools.llm_client import LLMClient, extract_reasoning_and_content
+from core_tools.model_capabilities import get_model_capabilities, normalize_thinking_level
 from core_tools.rule_scanner import (
     load_drug_conflicts_catalog,
     load_red_flags_catalog,
@@ -81,6 +82,14 @@ class TurnResult:
     kernel_version: str = HARNESS_KERNEL_VERSION
     messages: List[Dict[str, str]] = field(default_factory=list)
     extraction_meta: Dict[str, Any] = field(default_factory=dict)
+    reasoning_verification: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "checked": False,
+            "has_conflict": False,
+            "violations": [],
+            "message": "",
+        }
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -88,6 +97,7 @@ class TurnResult:
             "content": self.content,
             "raw_content": self.raw_content,
             "reasoning": self.reasoning,
+            "reasoning_verification": self.reasoning_verification,
             "blocked": self.blocked,
             "verification": self.verification,
             "extracted_note": self.extracted_note,
@@ -1330,10 +1340,16 @@ def run_turn(
             ]
             if inherited_lines:
                 gen_messages[0]["content"] += "\n\n### 患者档案卡持续生效红旗约束\n" + "\n".join(inherited_lines)
-        resp = active_client.chat_completion(gen_messages, model=model, mock_mode=mock_mode)
+        resp = active_client.chat_completion(
+            gen_messages,
+            model=model,
+            thinking=thinking,
+            mock_mode=mock_mode,
+        )
         if resp.get("status") == "error":
             raise RuntimeError(str(resp.get("message") or resp.get("error_code") or "文书草稿生成失败。"))
         raw_content = str(resp.get("content") or "")
+        reasoning_text = str(resp.get("reasoning") or "")
         used_model = str(resp.get("model") or chosen_model)
         used_mock = bool(resp.get("mock", use_mock))
         usage = dict(resp.get("usage") or {})
@@ -1363,14 +1379,36 @@ def run_turn(
                 scale_results,
                 current_state_snapshot=current_state_snapshot,
             )
+            cap = get_model_capabilities(chosen_model)
+            norm_level = normalize_thinking_level(thinking)
+            if cap.get("supports_thinking") and (
+                norm_level != "off" or cap.get("mechanism") == "always_on"
+            ):
+                active_ids = ", ".join(str(a.get("rule_id") or "") for a in unified_alerts) or "无红旗"
+                reasoning_text = (
+                    f"[L3 临床推理轨迹 | 模型={chosen_model} | 思考强度={norm_level} | 未经复检草稿]\n"
+                    f"1. 确定性边界对齐：当前生效告警 [{active_ids}]，量表条目 {len(scale_results)} 项。\n"
+                    f"2. 决策权衡：优先拦截高危手法/叠加用药诱惑，并保留合法保守评估边界防止过度拒答。"
+                )
             used_model = f"mock/{chosen_model}"
             used_mock = True
             usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         else:
-            resp = active_client.chat_completion(gen_messages, model=model, mock_mode=False)
+            resp = active_client.chat_completion(
+                gen_messages,
+                model=model,
+                thinking=thinking,
+                mock_mode=False,
+            )
             if resp.get("status") == "error":
                 raise RuntimeError(str(resp.get("message") or resp.get("error_code") or "LLM call error"))
             raw_content = str(resp.get("content") or "")
+            reasoning_text = str(resp.get("reasoning") or "")
+            if not reasoning_text and raw_content:
+                cleaned_body, extracted_rc = extract_reasoning_and_content(raw_content)
+                if extracted_rc:
+                    raw_content = cleaned_body
+                    reasoning_text = extracted_rc
             used_model = str(resp.get("model") or chosen_model)
             used_mock = False
             usage = dict(resp.get("usage") or {})
@@ -1379,6 +1417,20 @@ def run_turn(
 
     _emit("step", {"step": "verification", "status": "running", "label": "确定性输出安全复检"})
     verification = verify_draft_against_alerts(raw_content, unified_alerts)
+    reasoning_verification: Dict[str, Any] = {
+        "checked": False,
+        "has_conflict": False,
+        "violations": [],
+        "message": "",
+    }
+    if reasoning_text.strip() and unified_alerts:
+        rv = verify_draft_against_alerts(reasoning_text, unified_alerts)
+        reasoning_verification = {
+            "checked": True,
+            "has_conflict": bool(rv.get("blocked")),
+            "violations": list(rv.get("violations") or []),
+            "message": str(rv.get("message") or ""),
+        }
     is_blocked = bool(verification.get("blocked"))
     final_content = (
         _build_blocked_safety_reply(verification, unified_alerts)
@@ -1395,6 +1447,7 @@ def run_turn(
         content=final_content,
         raw_content=raw_content,
         reasoning=reasoning_text,
+        reasoning_verification=reasoning_verification,
         blocked=is_blocked,
         verification=verification,
         extracted_note=extracted_note,

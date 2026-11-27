@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   BookOpenText,
+  Brain,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -18,6 +19,7 @@ import {
 import type {
   ChatStepEvent,
   PatientCard,
+  ReasoningVerification,
   SessionEducationItem,
   SessionMessage,
   UnifiedAlert,
@@ -116,6 +118,74 @@ const AlertCardInline: React.FC<{ alert: UnifiedAlert }> = ({ alert }) => {
               {alert.reference.join("；")}
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ReasoningBlockL3: React.FC<{
+  reasoning?: string;
+  verification?: ReasoningVerification;
+}> = ({ reasoning, verification }) => {
+  const [open, setOpen] = useState(false);
+  const cleaned = (reasoning || "").trim();
+
+  if (!cleaned) {
+    return (
+      <div className="mb-2 flex items-center gap-1.5 rounded-xl bg-slate-50 px-2.5 py-1 text-[11px] text-slate-400">
+        <Brain className="h-3 w-3 shrink-0" />
+        <span>该模型未提供推理过程</span>
+      </div>
+    );
+  }
+
+  const hasConflict = Boolean(verification?.has_conflict);
+
+  return (
+    <div
+      data-testid="l3-reasoning-box"
+      className={`mb-2.5 rounded-2xl border px-3 py-2 text-xs ${
+        hasConflict
+          ? "border-rose-200 bg-rose-50/60"
+          : "border-slate-200/80 bg-slate-50/75"
+      }`}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full flex-wrap items-center justify-between gap-2 text-left"
+      >
+        <span className="flex flex-wrap items-center gap-1.5 font-semibold text-slate-700">
+          {open ? (
+            <ChevronDown className="h-3.5 w-3.5 text-slate-500" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 text-slate-500" />
+          )}
+          <Brain className="h-3.5 w-3.5 text-cyan-700" />
+          <span>L3 模型原始推理</span>
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900">
+            未经复检
+          </span>
+          {hasConflict && (
+            <span className="rounded-full bg-rose-700 px-2 py-0.5 text-[10px] font-bold text-white">
+              ⚠ 推理含禁忌冲突标注（未拦截正文）
+            </span>
+          )}
+        </span>
+        <span className="text-[10px] text-slate-400">{open ? "收起" : "展开详情"}</span>
+      </button>
+
+      {open && (
+        <div className="mt-2 space-y-2 border-t border-slate-200/70 pt-2">
+          {hasConflict && verification?.message && (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[11px] text-rose-900">
+              {verification.message}
+            </div>
+          )}
+          <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded-xl bg-white/90 p-2.5 font-mono text-[11px] leading-relaxed text-slate-700">
+            {cleaned}
+          </pre>
         </div>
       )}
     </div>
@@ -265,6 +335,11 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
                 </div>
                 <span className="font-mono text-slate-400">{msg.ts || ""}</span>
               </div>
+
+              <ReasoningBlockL3
+                reasoning={msg.reasoning}
+                verification={msg.reasoning_verification}
+              />
 
               <div className="text-sm leading-relaxed text-slate-800">
                 <MarkdownView content={msg.content} />
